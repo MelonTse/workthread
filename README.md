@@ -2,7 +2,9 @@
 
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；WorkBuddy 负责分析。网页无需模型 API，可独立维护 To Do 和进展日志。
 
-当前版本：**1.0.0rc1**。Windows、真实 IMAP、真实 WorkBuddy 与无人值守调度仍须外部验收，详见 `GOAL_EXECUTION_REPORT.md`。
+当前版本：**1.0.0rc1**。Windows runner 的 49 项测试及冻结程序冒烟已通过，Mac 真实 WorkBuddy 合成文件交换已验证；Windows 用户电脑、真实 IMAP 与正式无人值守仍待验收。
+
+Windows WorkBuddy 部署入口：[完整部署与真机验收提示词](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。提示词固定候选包、构建提交和 SHA-256，只用合成数据，不启用真实邮箱或正式定时任务。
 
 ## Mac 开发与合成演示
 

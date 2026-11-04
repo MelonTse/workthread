@@ -27,7 +27,7 @@ def test_cli_health_and_resources(tmp_path):
 def test_web_no_model_api():
     js = (
         Path(__file__).resolve().parents[1] / "src/workthread/web/static/app.js"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert not re.search(r"https?://", js)
 
 
@@ -43,10 +43,9 @@ def test_runtime_and_credential_paths_are_ignored():
         "data/private.json",
     ]
     result = subprocess.run(
-        ["git", "check-ignore", "--stdin"],
-        input="\n".join(paths) + "\n",
+        ["git", "check-ignore", "--stdin", "-z"],
+        input=("\0".join(paths) + "\0").encode("utf-8"),
         cwd=root,
         capture_output=True,
-        text=True,
     )
-    assert set(result.stdout.splitlines()) == set(paths)
+    assert set(result.stdout.decode("utf-8").rstrip("\0").split("\0")) == set(paths)

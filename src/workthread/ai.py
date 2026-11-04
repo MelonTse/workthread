@@ -22,7 +22,7 @@ def atomic_json(path, obj):
 
 
 def validate(obj, name):
-    schema = json.loads((SCHEMA_DIR / (name + ".json")).read_text())
+    schema = json.loads((SCHEMA_DIR / (name + ".json")).read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(obj)
 
 

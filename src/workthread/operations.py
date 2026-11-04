@@ -162,7 +162,7 @@ def restore(s, path, password, apply=False):
             }
         with s.lock:
             if manifest["scope"] == "todos":
-                data = json.loads((stage / "todos.json").read_text())
+                data = json.loads((stage / "todos.json").read_text(encoding="utf-8"))
                 if manifest["schema_version"] < 2:
                     for todo in data["todos"]:
                         todo.setdefault("no_due_date", 0)

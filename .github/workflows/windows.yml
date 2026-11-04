@@ -1,0 +1,30 @@
+name: Windows candidate
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - run: uv sync --frozen --python 3.13
+      - run: uv run --frozen pytest -q --junitxml=artifacts/windows-tests.xml
+      - run: uv run --frozen python scripts/check_source.py
+      - run: uv run --frozen pyinstaller --noconfirm packaging/workthread.spec
+      - name: Frozen binary smoke test including static resources and backup
+        run: uv run --frozen python scripts/smoke_frozen.py dist/WorkThread/WorkThread.exe
+      - run: uv run --frozen python scripts/package_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorkThread-windows-candidate
+          path: |
+            artifacts/WorkThread-*.zip
+            artifacts/WorkThread-*.zip.sha256
+            artifacts/windows-tests.xml

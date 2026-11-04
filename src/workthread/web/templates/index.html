@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{{ csrf }}"><title>WorkThread · 事脉 AI 工作台</title><link rel="stylesheet" href="/static/app.css"><script defer src="/static/app.js"></script></head><body>
+<aside class="sidebar"><a class="brand" href="#overview"><span class="brandmark">W<span>·</span></span><div>事脉<span>WORKTHREAD</span></div></a><div class="workspace-label">个人工作空间 <span class="live-dot"></span></div><nav aria-label="主导航"><button data-view="overview" class="active"><span>◈</span>工作总览</button><button data-view="mail"><span>▤</span>邮件与业务处理</button><button data-view="todos"><span>☷</span>To Do</button><button data-view="knowledge"><span>◎</span>客户关系与知识</button><button data-view="settings"><span>⚙</span>设置与运行状态</button></nav><div class="sidebar-bottom"><span class="live-dot"></span>本地工作台<div>V1.0 候选版</div></div></aside>
+<div class="shell"><header><div class="breadcrumb">个人工作空间 <span>/</span> <b id="breadcrumb">工作总览</b></div><div class="header-right"><span class="status-chip">● 本地运行</span><span class="avatar">我</span></div></header><main>
+<section class="page-heading"><h1 id="page-title">工作总览</h1><button class="primary" id="queue-ai">＋ 请求 AI 分析</button></section>
+<div id="workspace-content" aria-live="polite"></div>
+</main><div class="quick-capture"><button type="button" id="quick-toggle" class="primary" aria-haspopup="dialog" aria-controls="detail-dialog">＋ To Do</button></div></div>
+<dialog id="detail-dialog"><div class="dialog-top"><span id="dialog-label" class="dialog-caption">To Do</span><button class="icon-button" id="close-detail" aria-label="关闭详情">×</button></div><div id="detail-content"></div></dialog>
+<div id="toast" role="status"></div>
+</body></html>

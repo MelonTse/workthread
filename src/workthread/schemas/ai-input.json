@@ -1,0 +1,87 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "workspace_id": {
+      "type": "string"
+    },
+    "workspace_epoch": {
+      "type": "string"
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "input_sha256": {
+      "type": "string"
+    },
+    "job_type": {
+      "enum": [
+        "reconcile",
+        "normalize",
+        "historical"
+      ]
+    },
+    "rules_version": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "timezone": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "mail_batch_id": {
+          "type": "string"
+        },
+        "todo_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "historical": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mail_batch_id",
+        "todo_ids",
+        "historical"
+      ],
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "required": [
+        "messages",
+        "todos",
+        "progress_logs",
+        "human_decisions",
+        "customers",
+        "cases",
+        "knowledge",
+        "taxonomy"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "workspace_id",
+    "workspace_epoch",
+    "job_id",
+    "input_sha256",
+    "job_type",
+    "rules_version",
+    "created_at",
+    "timezone",
+    "scope",
+    "context"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "raw_input": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "input_at": {
+      "type": "string"
+    },
+    "input_timezone": {
+      "type": "string"
+    },
+    "source_ref": {
+      "type": "string"
+    },
+    "no_due_date": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "raw_input",
+    "input_at",
+    "input_timezone",
+    "source_ref"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

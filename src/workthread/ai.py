@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from jsonschema import Draft202012Validator
-from .core import uid, now, dumps, digest, load, Conflict
+from .core import uid, now, dumps, digest, load, Conflict, DeadlineError, validate_deadline
 
 SCHEMA_DIR = Path(__file__).parent / "schemas"
 
@@ -120,7 +120,7 @@ class Bridge:
                 "workspace_epoch": self.s.setting("workspace_epoch"),
                 "job_id": uid(),
                 "job_type": kind,
-                "rules_version": "1.0",
+                "rules_version": "1.0.0rc2",
                 "created_at": now(),
                 "timezone": self.s.setting("timezone"),
                 "scope": {
@@ -262,11 +262,16 @@ class Bridge:
                         self.s._create_todo(c, payload, "mail_ai", key)
                 elif typ == "normalize_todo":
                     orig = snapshots[tid]
+                    if {"due_date", "no_due_date"}.intersection(p):
+                        validate_deadline(
+                            p.get("due_date", orig["due_date"]),
+                            p.get("no_due_date", orig["no_due_date"]),
+                        )
                     due, ambiguous = self.s.relative_date(
                         orig["raw_input"], orig["input_at"], orig["input_timezone"]
                     )
                     if due and p.get("due_date") and p["due_date"] != due:
-                        raise ValueError("relative date must use input timestamp")
+                        raise DeadlineError("due_date: relative date must use input timestamp")
                     changes = {
                         k: v
                         for k, v in p.items()
@@ -276,13 +281,15 @@ class Bridge:
                             "description",
                             "priority",
                             "due_date",
+                            "no_due_date",
                             "completion_criteria",
                         )
                     }
-                    if due:
+                    if due and not {"due_date", "no_due_date"}.intersection(p):
                         changes["due_date"] = due
-                    if ambiguous and "due_date" in changes:
-                        changes.pop("due_date")
+                    if ambiguous and {"due_date", "no_due_date"}.intersection(changes):
+                        changes.pop("due_date", None)
+                        changes.pop("no_due_date", None)
                         self.s._review(
                             c, "ambiguous_date", {"todo_id": tid, "suggestion": p}
                         )

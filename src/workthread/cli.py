@@ -40,6 +40,11 @@ def worker(store, stop):
 def main(argv=None):
     import sys
 
+    # Redirected Windows CLI output must round-trip Chinese paths and JSON too.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
     default = (
         Path(sys.executable).resolve().parent.parent / "workspace"
         if getattr(sys, "frozen", False)
@@ -64,7 +69,7 @@ def main(argv=None):
     intake = sub.add_parser("intake")
     intake.add_argument("file", type=Path)
     bp = sub.add_parser("backup")
-    bp.add_argument("output", type=Path)
+    bp.add_argument("output", type=Path, nargs="?", help="ZIP path; defaults to a dated file in workspace/backups")
     bp.add_argument("--scope", choices=["full", "todos"], default="full")
     rp = sub.add_parser("restore")
     rp.add_argument("file", type=Path)
@@ -74,7 +79,9 @@ def main(argv=None):
     legacy.add_argument("--apply", action="store_true")
     a = p.parse_args(argv)
     store = Store(a.workspace)
-    install_templates(store)
+    deployment = install_templates(store)
+    if not deployment["ready"]:
+        print("WorkBuddy 模板存在自定义文件，已保留。请检查 agent-workspace/.workthread-deployment.json 并人工合并候选文件。", file=sys.stderr)
     from .mail import Archive
 
     Archive(store).recover()
@@ -104,7 +111,7 @@ def main(argv=None):
     if a.command == "doctor":
         result = store.health()
     elif a.command == "init":
-        result = {"workspace": str(store.root), "initialized": True}
+        result = {"workspace": str(store.root), "initialized": True, "deployment": deployment}
     elif a.command == "ai-prepare":
         pending = store.rows("SELECT job_id FROM ai_jobs WHERE state='pending'")
         result = pending or [{"job_id": j["job_id"]} for j in bridge.prepare()]
@@ -144,14 +151,12 @@ def main(argv=None):
             if not a.job_id or a.job_id == j["job_id"]
         ]
     elif a.command in ("backup", "restore"):
-        import getpass
-        from .operations import backup, restore
+        from .operations import backup, backup_filename, restore
 
-        password = getpass.getpass("Backup password: ")
         result = (
-            backup(store, a.output, password, a.scope)
+            backup(store, a.output or store.root / "backups" / backup_filename(a.scope), a.scope)
             if a.command == "backup"
-            else restore(store, a.file, password, a.apply)
+            else restore(store, a.file, a.apply)
         )
     elif a.command == "legacy-import":
         from .operations import import_legacy
@@ -163,6 +168,8 @@ def main(argv=None):
         result = {"initialized": True}
     print(dumps(result))
     if a.command == "doctor" and not result["ok"]:
+        p.exit(2)
+    if a.command == "init" and not deployment["ready"]:
         p.exit(2)
 
 

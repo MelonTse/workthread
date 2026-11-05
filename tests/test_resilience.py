@@ -112,6 +112,7 @@ def test_automatic_simple_reply_and_status_evidence(tmp_path):
     t = s.create_todo(
         {
             "raw_input": "回复此邮件",
+            "due_date": "2026-12-01",
             "completion_policy": {
                 "type": "reply_sent",
                 "reply_to_message_id": "<synthetic-1@example.org>",
@@ -175,23 +176,24 @@ def test_attachment_text_and_multipart_attachment_are_never_body():
 def test_backup_tamper_leaves_destination_untouched(tmp_path):
     s = Store(tmp_path / "source")
     seed(s)
-    file = tmp_path / "full.7z"
-    backup(s, file, "test-password-123")
+    file = tmp_path / "full.zip"
+    backup(s, file)
     raw = file.read_bytes()
     file.write_bytes(raw[: len(raw) // 2])
     dest = Store(tmp_path / "destination")
-    t = dest.create_todo({"raw_input": "keep this"})
+    t = dest.create_todo({"raw_input": "keep this", "no_due_date": True})
     with pytest.raises(Exception):
-        restore(dest, file, "test-password-123", True)
+        restore(dest, file, apply=True)
     assert dest.todo(t["todo_id"])["raw_input"] == "keep this"
 
 
 def test_ambiguous_dates_remain_review(tmp_path):
     s = Store(tmp_path)
-    t = s.create_todo(
-        {"raw_input": "今天或者明天联系客户", "input_at": "2026-01-01T10:00:00+08:00"}
-    )
-    assert t["due_date"] is None and t["needs_review"]
+    raw, at = "今天或者明天联系客户", "2026-01-01T10:00:00+08:00"
+    assert s.relative_date(raw, at, "Asia/Shanghai") == (None, True)
+    with pytest.raises(ValueError, match="due_date"):
+        s.create_todo({"raw_input": raw, "input_at": at})
+    assert not s.rows("SELECT * FROM todos")
 
 
 def test_workspace_lock_is_cross_process(tmp_path):
@@ -214,12 +216,14 @@ def test_future_schema_refused(tmp_path):
         Store(tmp_path)
 
 
-def test_backup_headers_are_encrypted(tmp_path):
-    import py7zr
+def test_backup_is_standard_zip_and_headers_are_readable_without_password(tmp_path):
+    import zipfile
 
     s = Store(tmp_path / "source")
-    file = tmp_path / "encrypted.7z"
-    backup(s, file, "synthetic-password", "todos")
-    with pytest.raises(Exception):
-        with py7zr.SevenZipFile(file, "r") as z:
-            z.getnames()
+    file = tmp_path / "ordinary.zip"
+    backup(s, file, "todos")
+    assert zipfile.is_zipfile(file)
+    with zipfile.ZipFile(file) as z:
+        assert set(z.namelist()) == {"manifest.json", "todos.json"}
+        assert z.testzip() is None and all(not i.flag_bits & 1 for i in z.infolist())
+        assert z.read("todos.json")

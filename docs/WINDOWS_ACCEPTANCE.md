@@ -1,32 +1,41 @@
-# Windows 发布候选验收
+# Windows 10 rc2 全新安装验收（G1 草稿）
 
-当前 Windows CI 配置已提供，但本轮没有远程仓库或 runner，**尚未运行 Windows 构建**。不得将 Mac PyInstaller 通过描述为 Windows 通过。
+只有 G4 交付及传输闸门获批后，才由目标 Windows 电脑上的 WorkBuddy 执行 G5。当前仅有 Mac 本地测试及 Windows 静态审查，不具备 Windows PASS 结论。不得以 rc1 原地升级、Windows runner 或 Mac 包替代真机验收。
 
-## CI 构建
+## 环境与隔离
 
-1. 用户另行授权后创建 GitHub 私有仓库；先运行 source isolation 检查，只提交源码与合成测试。
-2. 执行 .github/workflows/windows.yml：固定 windows-2022，uv 0.13.7，Python 3.13，frozen lock，pytest、隔离检查、PyInstaller onedir、二进制冒烟、便携 ZIP。
-3. 下载 Actions artifact，检查 SHA256SUMS.json。候选包包括 app、Start/Health/Backup/Restore.cmd、tools 安装升级、依赖锁和文档。
-4. 候选验收通过后，以 v1.0.0 标签和干净 CI 产物创建私有 Release；不从真实工作空间打包。发布权限由用户提供，本轮不执行。
+- [ ] Windows 10 Professional 22H2 / 19045 / x64；记录 WorkBuddy 实际版本 5.9.3、时区、可写空间、端口。
+- [ ] 离线资料 `F:\WorkThread-Offline-Deploy-V2`；程序新目录 `F:\WorkThread`，已有同名内容时停止，不覆盖或删除。
+- [ ] 以实际 G3 报告核对候选版本 1.0.0rc2、Commit、ZIP SHA-256、包内文件和规则资源。
+- [ ] 无系统 Python、无管理员权限可初始化、启动；中文空格路径及新盘符检查。
+- [ ] Install.cmd 自动初始化 `F:\WorkThread\workspace` 与 `F:\WorkThread\acceptance`。正式空间无账号、邮件、合成 To Do；两者 ID/数据隔离。
 
-## 必须在 Windows 真机勾选
+## 日期及核心业务
 
-- [ ] Windows 11 x64 无 Python 环境，中文及空格路径解压、初始化、启动、重启。
-- [ ] 同目录复制到其他盘符运行；源码虚拟环境不可用作便携包。
-- [ ] 合成数据录入、状态、两条日志、草稿编辑复制、模拟 AI 导入。
-- [ ] Windows Credential Manager 存取 IMAP 授权码，无明文文件或备份凭证。
-- [ ] 真实邮箱经授权小范围验收 TLS、文件夹、MIME 与附件段零抓取，再全量归档。
-- [ ] UID 重置、网络失败、磁盘满、进程中断后可恢复。
-- [ ] WorkBuddy 新会话加载项目规则与三个 Skills，实际输出和回执闭环。
-- [ ] 正式每日任务先保持禁用，验证权限、登录、睡眠及错过执行补跑后再启用。
-- [ ] 完整备份在第二台电脑恢复，旧电脑离线，重新授权、加载规则、重建任务。
-- [ ] To Do 单独恢复、冲突处理、错误密码与损坏备份。
-- [ ] upgrade.ps1 成功升级，以及失败后程序和匹配数据备份恢复。
-- [ ] Defender/SmartScreen 与未签名程序行为；目前无 Authenticode 签名，不绕过系统警告。
-- [ ] 全部通过后才发布正式 Release。保留系统、WorkBuddy 版本和截图／日志证据。
+- [ ] API POST 和 PATCH 分别验证：日期/false 允许；null/true 允许；null/false 拒绝；日期/true 拒绝。错误含字段和原因，失败零写入。
+- [ ] HTML 新建、编辑；聊天 intake、AI create_todo、normalize_todo 规则一致；人工保护及原始时点相对日期不变。
+- [ ] 同状态连续两条 Progress Log；草稿与反馈对应邮件；知识保持作用域和确认状态。
 
-## 本次 RC 准备检查 · 2026-11-04
+## WorkBuddy（逐项独立证据）
 
-Mac 当前 49 项测试通过，最新 onedir 构建与强化冒烟通过；这些是 Mac 证据。工作流采用同一 tests、release isolation 和 frozen smoke 脚本。发布隔离门禁现会拒绝运行目录、日志、私钥及常见 token，并检查暂存与工作副本。候选目录只从源码、构建产物与锁文件组装。
+- [ ] GUI Open Folder 选 `F:\WorkThread\acceptance\agent-workspace`，确认信任。不能选资料或 data 上级。
+- [ ] 根 CODEBUDDY.md 与 .codebuddy/rules/workthread.md 实际加载，保留规则证据。
+- [ ] .workbuddy/skills 内三个 Skills 出现在客户端实际可用列表，保留注册表/列表证据。
+- [ ] 按自然语言业务请求分别真实调用 workthread-analysis、workthread-intake、workthread-knowledge，保留工具记录。
+- [ ] 全新独立会话仍能发现及自动选择三个 Skill。读取文件或模型自报不能算 PASS。
+- [ ] 真实 AI 输出入库，Python completed/saved 回执与网页一致；重复结果无重复数据，过期结果不覆盖人工版本。
+- [ ] 缺失时如实报不可用，检查工作空间、信任、启用状态；不修改客户端程序、缓存或用户级 Skills。
 
-尚无远程仓库或 Windows runner 结果，Actions 可执行性仍须实际提交后运行确认。Windows 的 PowerShell 路径、Credential Manager、终端密码输入、Defender／SmartScreen、换盘符、休眠补跑、第二台电脑恢复和 WorkBuddy 权限需按上表验收。Mac 真实 WorkBuddy 成功不代替 Windows 客户端验收；真实 IMAP 需另行授权后进行。
+## ZIP 与重启
+
+- [ ] To Do、Full 都是普通 ZIP，可由文件管理器识别、列出和解压，不出现密码框或终端密码输入。
+- [ ] SHA-256、manifest v2、数量/大小统计一致。ZIP 损坏、错误 manifest、路径穿越明确拒绝，目标数据不受损。
+- [ ] 两类备份先预览后分别恢复到新目录；原备份、当前数据和历史 7z 保留。
+- [ ] 完整恢复的保护目录可查；人为失败测试仅用独立合成副本，不对正式工作空间注入。
+- [ ] 新目标与重启后 To Do、状态、日期、来源、两条进展完整；Full 邮件/草稿/知识保留，计划与邮箱仍禁用。
+
+## 闸门结果
+
+逐项 PASS/FAIL/未测/BLOCKED，记录命令退出码、路径、版本和证据。失败停止对应验收，不修改源码或验收标准制造通过。报告不得含凭证，不上传真实资料。
+
+只有 G5 关键项有真机证据且最终闸门获批，才讨论真实 IMAP；当前无真实邮箱、调度、旧知识导入或传输授权。

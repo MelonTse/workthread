@@ -1,4 +1,4 @@
-"""Exercise the native executable, bundled web resources and encrypted restore via HTTP."""
+"""Exercise the native executable, bundled web resources and plain ZIP restore via HTTP."""
 
 import http.cookiejar
 import json
@@ -67,13 +67,13 @@ with tempfile.TemporaryDirectory(prefix="workthread smoke 中文 ") as tmp:
         archive = post(
             "/backup",
             json.dumps(
-                {"scope": "full", "password": "frozen-synthetic-password"}
+                {"scope": "full"}
             ).encode(),
         ).read()
-        assert archive.startswith(b"7z\xbc\xaf\x27\x1c")
+        assert archive.startswith(b"PK\x03\x04")
         boundary = "WorkThreadSyntheticBoundary"
         body = (
-            f'--{boundary}\r\nContent-Disposition: form-data; name="password"\r\n\r\nfrozen-synthetic-password\r\n--{boundary}\r\nContent-Disposition: form-data; name="apply"\r\n\r\ntrue\r\n--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="backup.7z"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()
+            f'--{boundary}\r\nContent-Disposition: form-data; name="apply"\r\n\r\ntrue\r\n--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="backup.zip"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()
             + archive
             + f"\r\n--{boundary}--\r\n".encode()
         )
@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix="workthread smoke 中文 ") as tmp:
         assert restored["status"] == "in_progress" and len(restored["logs"]) == 2
         assert (workspace / "agent-workspace/schemas/ai-output.json").exists()
         print(
-            "Frozen native startup, HTML/JS, schemas, SQLite, encrypted full backup and restore: passed"
+            "Frozen native startup, HTML/JS, schemas, SQLite, plain ZIP full backup and restore: passed"
         )
     finally:
         process.terminate()

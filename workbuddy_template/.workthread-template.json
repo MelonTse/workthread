@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0rc2",
+  "previous_hashes": {
+    "CODEBUDDY.md": "b4c97f8d2985e5f073fcdc9f4ab7766a5e09ac23bd10332b856dd935c7258f43",
+    ".codebuddy/rules/workthread.md": "e1954ac55337f24cd719ef551b921905722d83fe85d949cb946b5c8fb89ca893",
+    "schemas/ai-input.json": "b8e7b23e087054c2799100997a6033cb8557f0f5d15e3bc905e9ac2d748c2731",
+    "schemas/ai-output.json": "0548b6c010b33bb20a3b4e5398e8daae56dc6c85b93e0071792d07c29e8b2101",
+    "schemas/intake.json": "ccba2fdf61225a1e60ea8979c933dacde4e69144a2975f77851505ea6818ac95"
+  },
+  "preserved_skill_prefixes": {
+    "workthread-analysis": {
+      "bytes": 842,
+      "sha256": "7408b9766bddd00c72b0fc62b278fe547ebcf0c3d400fbe5019c1c5ad57a276f"
+    },
+    "workthread-intake": {
+      "bytes": 971,
+      "sha256": "6d4717e38b9b22ad120124b161649ac055a3639a2f986cd668e8bbd67ba4e805"
+    },
+    "workthread-knowledge": {
+      "bytes": 553,
+      "sha256": "45f73ac342eb18856656e6784d887573a6e47b223556e827142f41614ea2d1d6"
+    }
+  }
+}

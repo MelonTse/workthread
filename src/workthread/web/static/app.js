@@ -875,8 +875,8 @@ function settingsView() {
       <button type="submit" class="primary">保存配置</button><span class="form-note">保存后同步默认暂停；授权码存入系统凭证库</span></form></details>
     </section>
     <section data-settings-panel="backup" ${settingsState.tab==='backup'?'':'hidden'}><div class="split">
-      ${card('备份',`<div class="card-body stack compact-form"><label>备份密码（至少 10 字符）<input id="backup-password" type="password" autocomplete="new-password"></label><div class="button-row"><button data-backup="todos">备份 To Do</button><button data-backup="full" class="primary">完整备份</button></div><span class="form-note">备份加密，不含邮箱授权码</span></div>`)}
-      ${card('恢复',`<form id="restore-form" class="card-body stack compact-form"><label>备份文件<input type="file" name="file" accept=".7z" required></label><label>恢复密码<input type="password" name="password" required></label><button type="submit">校验备份</button><div id="restore-preview" class="small prewrap"></div><button type="button" id="apply-restore" class="primary" hidden>确认恢复</button></form>`)}</div>
+      ${card('备份',`<div class="card-body stack compact-form"><div class="button-row"><button data-backup="todos">备份 To Do</button><button data-backup="full" class="primary">完整备份</button></div><span class="form-note">普通 ZIP，无需密码，不含邮箱授权码</span></div>`)}
+      ${card('恢复',`<form id="restore-form" class="card-body stack compact-form"><label>备份文件<input type="file" name="file" accept=".zip" required></label><button type="submit">校验备份</button><div id="restore-preview" class="small prewrap"></div><button type="button" id="apply-restore" class="primary" hidden>确认恢复</button></form>`)}</div>
     </section>`;
   bindTabs('[data-settings-tab]', key => {
     settingsState.tab = key;
@@ -954,18 +954,18 @@ function settingsView() {
         'X-CSRF-Token': $('meta[name="csrf-token"]').content
       },
       body: JSON.stringify({
-        scope: el.dataset.backup,
-        password: $('#backup-password').value
+        scope: el.dataset.backup
       })
     });
     if (!r.ok) throw Error((await r.json()).error);
     const url = URL.createObjectURL(await r.blob()),
       a = document.createElement('a');
     a.href = url;
-    a.download = 'workthread-' + el.dataset.backup + '.7z';
+    a.download = /filename="?([^";]+)"?/.exec(r.headers.get('Content-Disposition') || '')?.[1]
+      || 'WorkThread-' + (el.dataset.backup === 'todos' ? 'Todos-' : 'Full-') + new Date().toISOString().slice(0,10) + '.zip';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    toast('加密备份已生成')
+    toast('ZIP 备份已生成')
   }));
   const restoreBody = apply => {
     const f = new FormData($('#restore-form'));
@@ -976,9 +976,13 @@ function settingsView() {
     e.preventDefault();
     const p = await api('/restore', 'POST', restoreBody(false));
     $('#restore-preview').textContent = '校验通过 · ' + p.manifest.scope + ' · ' + Object.keys(p.manifest
-      .files).length + ' 个文件\n恢复前保留现有数据副本。';
+      .files).length + ' 个文件 · ' + p.manifest.total_size + ' 字节\n' + p.files.map(f => f.path + ' (' + f.size + ' 字节)').join('\n') + '\n恢复前保留现有数据副本。';
     $('#apply-restore').hidden = false
   });
+  $('#restore-form [name=file]').onchange = () => {
+    $('#apply-restore').hidden = true;
+    $('#restore-preview').textContent = '';
+  };
   $('#apply-restore').onclick = attempt(async () => {
     await api('/restore', 'POST', restoreBody(true));
     toast('恢复完成，请重新授权并检查运行状态');

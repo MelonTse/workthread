@@ -21,6 +21,12 @@
     "source_ref": {
       "type": "string"
     },
+    "due_date": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "no_due_date": {
       "type": "boolean"
     }

@@ -19,7 +19,7 @@ def test_cli_health_and_resources(tmp_path):
     )
     assert result.returncode == 0 and '"ok": true' in result.stdout
     assert (
-        tmp_path / "agent-workspace/.codebuddy/skills/workthread-analysis/SKILL.md"
+        tmp_path / "agent-workspace/.workbuddy/skills/workthread-analysis/SKILL.md"
     ).exists()
     assert (tmp_path / "agent-workspace/schemas/ai-output.json").exists()
 
@@ -37,6 +37,8 @@ def test_runtime_and_credential_paths_are_ignored():
         ".runtime/demo/data/workthread.sqlite3",
         "workspace/data/meta/2026-11.jsonl",
         "backups/full.7z",
+        "backups/full.zip",
+        "acceptance/agent-workspace/exchange/intake/synthetic.json",
         ".env",
         "secret.key",
         ".tools/python/bin/python",

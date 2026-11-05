@@ -1,15 +1,13 @@
-# Windows 候选版安装与首轮验收
+# Windows 10 rc2 全新安装速查（G1 草稿）
 
-适用：Windows 11 x64 候选测试。GitHub Windows runner 通过与用户电脑真机通过分别记录；runner 成功不能替代本清单。无需安装 Python。
+本页准备供后续批准阶段使用。当前没有 rc2 Windows 构建 SHA 或正式安装授权，不能用 rc1 包代替。
 
-1. 使用有私有仓库权限的 GitHub 账号进入本次成功 Actions 运行，下载 `WorkThread-windows-candidate` Artifact。先解开 Artifact 外层 ZIP，取得 `WorkThread-1.0.0rc1-windows-x64.zip` 与同名 `.zip.sha256`。
-2. 在 PowerShell 执行 `Get-FileHash .\WorkThread-1.0.0rc1-windows-x64.zip -Algorithm SHA256`，与 `.sha256` 文件及构建交付报告比较。相同后把候选 ZIP 完整解压到当前用户可写目录，不放在 Program Files；保留整个 app 目录，不单独移动 EXE。
-3. 从解压根目录执行 `app\WorkThread.exe --workspace workspace init`，再双击 `Health.cmd`。也可在系统策略允许时运行 `tools\install.ps1`，无需管理员权限；不要为了运行脚本降低系统安全策略。
-4. 双击 `Start.cmd`，浏览器应打开本地网页。关闭其终端会停止服务。若端口占用，先检查已有 WorkThread 进程，保留用户数据。
-5. 只录入合成事项：新增标题及日期／无限期，保存后窗口关闭；修改状态并连续追加两条进展，重启后核对保留。
-6. 按 `WORKBUDDY_SETUP.md` 在新的独立合成空间加载规则和 Skills，完成手动文件交换自检。真实邮箱授权、正式每日任务及生产资料迁入留待下一轮明确指令。
-7. 测试备份与恢复、中文／空格路径和不同盘符；升级先关闭程序并保留加密备份。错误密码、损坏备份和回滚按 `docs/WINDOWS_ACCEPTANCE.md` 验证。
+1. G4 批准后，资料放 `F:\WorkThread-Offline-Deploy-V2`。依据 G3 实际构建报告及 .zip.sha256，用 PowerShell `Get-FileHash -Algorithm SHA256` 核对程序 ZIP；按 SHA256SUMS.json 检查包内文件，JSON 使用 UTF-8。
+2. 目标环境为 Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。完整解压到新的 `F:\WorkThread`，无需安装 Python。若此目录已有内容，停止并选择新目录，不覆盖 rc1。
+3. 双击 `Install.cmd`（无需 PowerShell 执行策略调整）或运行 `tools\install.ps1`，检查退出码及两个部署报告；两个空间都自动安装规则、三个 Skills、Schema、交换目录。自定义文件冲突须人工处理，不能静默覆盖。
+4. 双击 Health.cmd、Start.cmd，正式空间 `F:\WorkThread\workspace` 保持空白。合成验收另启动 `app\WorkThread.exe --workspace F:\WorkThread\acceptance demo --port 8766 --open`。
+5. 通过 **WorkBuddy GUI Open Folder** 选择 `F:\WorkThread\acceptance\agent-workspace` 并确认信任。不得选择资料目录。正式使用选择 `F:\WorkThread\workspace\agent-workspace`。
+6. 按 WINDOWS_ACCEPTANCE.md 分别验证规则加载、Skill 可用列表、三个真实调用、全新会话和 Python 回执。读取 SKILL.md 不算调用。
+7. 验证四种日期组合、两条进展、普通 ZIP 无密码备份/预览/新目录恢复和重启。保留历史 7z 文件，不使用它们恢复 rc2。
 
-如果 Defender／SmartScreen 或组织策略拦截，记录提示与包 SHA，交由用户或管理员审核；本候选包未提供 Authenticode 签名，不绕过系统警告。
-
-数据位于解压根目录的 workspace；完整迁移使用加密备份。不要上传 workspace、邮箱授权码、数据库或业务资料到 GitHub。
+完整操作见 WORKBUDDY_SETUP.md 及 WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md。系统策略或 Defender 拦截时保留证据，不绕过保护。当前不接真实邮箱，不启用正式计划，不导入旧知识，不自动传输资料到另一台电脑。

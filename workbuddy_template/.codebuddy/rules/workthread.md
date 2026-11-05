@@ -29,4 +29,6 @@ alwaysApply: true
 
 - 反馈含 target_id 时，只针对该 draft_id 及其 message_id 的具体回复理解；参考随输入提供的 draft_subject、draft_body。不得把单份草稿的修改意见自动提升为所有客户或个人通用规则。
 
-- 截止设置包含具体 due_date 或用户明确选择的 no_due_date=true（无限期）。未知日期保持待填写；不得擅自推断为无限期。人工确认的截止设置作为一个整体保护。
+- 截止设置包含具体 due_date 或用户明确选择的 no_due_date=true（无限期）。未知日期先提出待确认建议，不写入无效 To Do；不得擅自推断为无限期。人工确认的截止设置作为一个整体保护。
+
+- 按 CODEBUDDY.md 的职责映射自动调用三个独立 Skills。项目 Skills 位于 .workbuddy/skills；缺失时明确报告不可用，检查工作空间、信任、启用状态和目录。规则已加载不代表 Skills 已发现，读取文件不代表真实调用。

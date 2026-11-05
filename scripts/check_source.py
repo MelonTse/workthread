@@ -11,14 +11,14 @@ if run.returncode:
         "Initialize Git and stage only reviewed source files before this check"
     )
 files = [p for p in run.stdout.decode().split("\0") if p]
-forbidden = {".jsonl", ".7z", ".sqlite3", ".sqlite", ".db", ".key", ".pem", ".p12", ".pfx", ".log"}
+forbidden = {".jsonl", ".7z", ".zip", ".sqlite3", ".sqlite", ".db", ".key", ".pem", ".p12", ".pfx", ".log"}
 bad = [
     p
     for p in files
     if Path(p).suffix.lower() in forbidden
     or any(
         x in Path(p).parts
-        for x in ("workspace", "data", "backups", ".runtime", ".tools", ".venv", "credentials", "secrets", "artifacts", "dist", "build")
+        for x in ("workspace", "acceptance", "data", "backups", ".runtime", ".tools", ".venv", "credentials", "secrets", "artifacts", "dist", "build")
     )
     or Path(p).name.startswith(".env")
 ]

@@ -27,6 +27,8 @@ def test_three_intakes_and_progress(tmp_path):
         "input_at": "2026-01-01T10:00:00+08:00",
         "input_timezone": "Asia/Shanghai",
         "source_ref": "conversation:synthetic",
+        "due_date": "2026-12-01",
+        "no_due_date": False,
     }
     atomic_json(b.exchange / "intake" / "sample.json", request)
     assert b.consume()[0]["state"] == "saved"
@@ -63,8 +65,8 @@ def test_manual_protection_and_stale_result(tmp_path):
 
 def test_merge_preserves_log_and_source(tmp_path):
     s = Store(tmp_path)
-    a = s.create_todo({"raw_input": "客户确认"})
-    b = s.create_todo({"raw_input": "客户确认进度"})
+    a = s.create_todo({"raw_input": "客户确认", "no_due_date": True})
+    b = s.create_todo({"raw_input": "客户确认进度", "no_due_date": True})
     s.progress(b["todo_id"], {"content": "原始记录"})
     s.merge(a["todo_id"], b["todo_id"], {a["todo_id"]: 1, b["todo_id"]: 1})
     assert len(s.todo(a["todo_id"])["logs"]) == 1

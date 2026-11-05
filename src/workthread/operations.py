@@ -1,24 +1,27 @@
-"""Consistent encrypted backups and reversible, confirmed legacy imports."""
+"""Consistent ZIP backups and reversible, confirmed legacy imports."""
 
 import hashlib
 import json
 import shutil
 import sqlite3
+import stat
 import tempfile
+import zipfile
+import zlib
 from pathlib import Path, PurePosixPath
-import py7zr
-from .core import Store, uid, now, dumps, digest, load, VERSION, Conflict
+
 from .ai import Bridge
+from .core import VERSION, Conflict, Store, digest, dumps, load, now, uid
 
 TODO_TABLES = ["todos", "todo_sources", "progress_logs", "status_events"]
 
 
-def backup(s, path, password, scope="full"):
-    if len(password) < 10:
-        raise ValueError("备份密码至少 10 个字符")
+def backup(s, path, scope="full"):
     if scope not in ("full", "todos"):
         raise ValueError("invalid backup scope")
     path = Path(path).resolve()
+    if path.suffix.lower() != ".zip":
+        raise ValueError("备份文件必须使用 .zip 扩展名")
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         raise ValueError("备份目标已存在")
@@ -41,19 +44,22 @@ def backup(s, path, password, scope="full"):
                     for kind in ("meta", "body"):
                         (stage / "data" / kind).mkdir()
                         for f in (s.data / kind).glob("*.jsonl"):
+                            if f.is_symlink():
+                                raise ValueError("归档不接受符号链接")
                             shutil.copy2(f, stage / "data" / kind / f.name)
-                    for sub in (
-                        "config",
-                        "agent-workspace/.codebuddy",
-                        "agent-workspace/schemas",
-                    ):
+                    for sub in ("config", "agent-workspace"):
                         source = s.root / sub
                         if source.is_dir():
-                            shutil.copytree(source, stage / sub)
-                    if (s.root / "agent-workspace/CODEBUDDY.md").exists():
-                        target = stage / "agent-workspace/CODEBUDDY.md"
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(s.root / "agent-workspace/CODEBUDDY.md", target)
+                            shutil.copytree(
+                                source,
+                                stage / sub,
+                                symlinks=True,
+                                ignore=lambda directory, names: (
+                                    {"exchange"}
+                                    if Path(directory) == s.root / "agent-workspace"
+                                    else set()
+                                ),
+                            )
                 else:
                     document = {
                         table: s.rows("SELECT * FROM " + table) for table in TODO_TABLES
@@ -66,8 +72,13 @@ def backup(s, path, password, scope="full"):
                         ),
                     }
                     (stage / "todos.json").write_text(dumps(document), encoding="utf-8")
+            if any(f.is_symlink() for f in stage.rglob("*")):
+                raise ValueError("备份不接受符号链接，请使用工作空间内的普通文件")
+            if scope == "full":
+                verify_snapshot(stage)
             manifest = {
-                "format_version": 1,
+                "format_version": 2,
+                "container": "zip",
                 "schema_version": VERSION,
                 "scope": scope,
                 "created_at": now(),
@@ -80,17 +91,17 @@ def backup(s, path, password, scope="full"):
                     if f.is_file()
                 },
             }
+            manifest["file_count"] = len(manifest["files"])
+            manifest["total_size"] = sum(f["size"] for f in manifest["files"].values())
             (stage / "manifest.json").write_text(dumps(manifest), encoding="utf-8")
-            with py7zr.SevenZipFile(
-                tmp, "w", password=password, header_encryption=True
-            ) as z:
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
                 for f in stage.rglob("*"):
                     if f.is_file():
-                        z.write(f, str(f.relative_to(stage)).replace("\\", "/"))
-            # Verify encrypted archive before exposing the final filename.
-            with py7zr.SevenZipFile(tmp, "r", password=password) as z:
-                if z.testzip() is not None:
-                    raise ValueError("backup archive verification failed")
+                        z.write(f, f.relative_to(stage).as_posix())
+            with tempfile.TemporaryDirectory(prefix="workthread-verify-") as check:
+                extract_verified(tmp, Path(check))
+            if path.exists():
+                raise ValueError("备份目标已存在")
             tmp.replace(path)
         return {"path": str(path), "scope": scope, "files": len(manifest["files"])}
     finally:
@@ -98,74 +109,204 @@ def backup(s, path, password, scope="full"):
             tmp.unlink()
 
 
-def extract_verified(path, password, stage):
-    with py7zr.SevenZipFile(
-        path, "r", password=password, max_extract_size=20 * 1024**3
-    ) as z:
-        infos = z.list()
-        total = 0
-        for info in infos:
-            name = info.filename
-            p = PurePosixPath(name.replace("\\", "/"))
-            if (
-                p.is_absolute()
-                or ".." in p.parts
-                or ":" in name
-                or getattr(info, "is_symlink", False)
-            ):
-                raise ValueError("unsafe archive path")
-            total += info.uncompressed or 0
-        if total > 20 * 1024**3:
-            raise ValueError("archive exceeds restore size limit")
-        z.extractall(stage)
-    manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("scope") not in ("full", "todos"):
+def backup_filename(scope):
+    if scope not in ("todos", "full"):
         raise ValueError("invalid backup scope")
-    if manifest["format_version"] != 1 or manifest["schema_version"] > VERSION:
-        raise ValueError("unsupported backup version")
-    actual = {
-        str(f.relative_to(stage)).replace("\\", "/")
-        for f in stage.rglob("*")
-        if f.is_file() and f.name != "manifest.json"
-    }
-    if actual != set(manifest["files"]):
-        raise ValueError("backup file manifest mismatch")
-    for name, info in manifest["files"].items():
-        f = stage / name
+    import datetime as dt
+
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return f"WorkThread-{'Todos' if scope == 'todos' else 'Full'}-{stamp}.zip"
+
+
+def safe_zip_name(name):
+    p = PurePosixPath(name.replace("\\", "/"))
+    if (
+        not name
+        or "\\" in name
+        or p.is_absolute()
+        or ".." in p.parts
+        or any(c in name for c in ":<>|?*\x00")
+        or any(
+            part.rstrip(" .") != part or part in ("", ".")
+            for part in name.rstrip("/").split("/")
+        )
+        or any(
+            part.split(".")[0].upper()
+            in {
+                "CON",
+                "PRN",
+                "AUX",
+                "NUL",
+                *[f"COM{i}" for i in range(1, 10)],
+                *[f"LPT{i}" for i in range(1, 10)],
+            }
+            for part in p.parts
+        )
+    ):
+        raise ValueError("unsafe ZIP archive path: " + name[:100])
+    return p
+
+
+def extract_verified(path, stage):
+    try:
+        with zipfile.ZipFile(path, "r") as z:
+            infos = z.infolist()
+            names = set()
+            file_names = set()
+            total = 0
+            for info in infos:
+                safe_zip_name(info.filename)
+                if info.filename != info.orig_filename:
+                    raise ValueError("unsafe ZIP filename")
+                key = info.filename.rstrip("/").casefold()
+                if (
+                    key in names
+                    or stat.S_ISLNK(info.external_attr >> 16)
+                    or info.flag_bits & 1
+                ):
+                    raise ValueError("unsafe, duplicate or encrypted ZIP entry")
+                names.add(key)
+                if not info.is_dir():
+                    file_names.add(key)
+                total += info.file_size
+            for name in names:
+                if any(
+                    parent.as_posix() in file_names
+                    for parent in PurePosixPath(name).parents
+                    if parent.as_posix() != "."
+                ):
+                    raise ValueError("unsafe ZIP file/directory collision")
+            if total > 20 * 1024**3 or len(infos) > 100000:
+                raise ValueError("ZIP archive exceeds restore size limit")
+            if z.testzip() is not None:
+                raise ValueError("ZIP 完整性校验失败")
+            z.extractall(stage)
+    except (
+        zipfile.BadZipFile,
+        EOFError,
+        RuntimeError,
+        NotImplementedError,
+        zlib.error,
+    ) as e:
+        raise ValueError(
+            "ZIP 损坏或格式不受支持；仅支持新版普通 ZIP，旧 7z 保持原样"
+        ) from e
+    try:
+        manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
         if (
-            f.stat().st_size != info["size"]
-            or hashlib.sha256(f.read_bytes()).hexdigest() != info["sha256"]
+            manifest["format_version"] != 2
+            or manifest["container"] != "zip"
+            or type(manifest["schema_version"]) is not int
+            or not 2 <= manifest["schema_version"] <= VERSION
+            or manifest["scope"] not in ("full", "todos")
         ):
-            raise ValueError("backup hash mismatch")
+            raise ValueError("unsupported backup manifest version or scope")
+        actual = {
+            f.relative_to(stage).as_posix() for f in stage.rglob("*") if f.is_file()
+        }
+        if actual != set(manifest["files"]) | {"manifest.json"}:
+            raise ValueError("backup file manifest mismatch")
+        if manifest["file_count"] != len(manifest["files"]) or manifest[
+            "total_size"
+        ] != sum(i["size"] for i in manifest["files"].values()):
+            raise ValueError("backup manifest counts mismatch")
+        for name, info in manifest["files"].items():
+            safe_zip_name(name)
+            f = stage / name
+            if (
+                f.stat().st_size != info["size"]
+                or hashlib.sha256(f.read_bytes()).hexdigest() != info["sha256"]
+            ):
+                raise ValueError("backup SHA-256 hash mismatch: " + name)
+        required = (
+            "data/workthread.sqlite3" if manifest["scope"] == "full" else "todos.json"
+        )
+        if required not in manifest["files"]:
+            raise ValueError("backup manifest missing required payload")
+        if manifest["scope"] == "full":
+            if any(
+                PurePosixPath(name).parts[0]
+                not in ("data", "config", "agent-workspace")
+                for name in manifest["files"]
+            ):
+                raise ValueError("unexpected full backup payload")
+        elif set(manifest["files"]) != {"todos.json"}:
+            raise ValueError("unexpected To Do backup payload")
+    except (KeyError, TypeError, AttributeError, OSError) as e:
+        raise ValueError("invalid backup manifest") from e
     return manifest
 
 
-def restore(s, path, password, apply=False):
+def verify_snapshot(stage):
+    """Validate the SQLite Backup API snapshot against its complete JSONL journal."""
+    path = stage / "data/workthread.sqlite3"
+    if not path.is_file():
+        raise ValueError("missing backup database")
+    c = sqlite3.connect(path)
+    c.row_factory = sqlite3.Row
+    try:
+        if (
+            c.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
+            or c.execute("PRAGMA foreign_key_check").fetchall()
+        ):
+            raise ValueError("invalid backup database")
+        expected = {"meta": {}, "body": {}}
+        messages = {}
+        for row in c.execute("SELECT * FROM archive_commits"):
+            if row["state"] != "committed":
+                raise ValueError("unfinished archive transaction in backup")
+            payload = load(row["payload"])
+            for kind, records in expected.items():
+                if payload[kind] is not None:
+                    records[row["tx_id"]] = payload[kind]
+            if payload["meta"]["record_type"] == "mail_archived":
+                messages[payload["message"]["message_id"]] = payload["message"]
+        actual_messages = {
+            r["message_id"]: dict(r) for r in c.execute("SELECT * FROM messages")
+        }
+        if actual_messages != messages:
+            raise ValueError("JSONL/database message consistency check failed")
+        for kind, records in expected.items():
+            actual = {}
+            for file in (stage / "data" / kind).glob("*.jsonl"):
+                for line in file.read_text(encoding="utf-8").splitlines():
+                    record = json.loads(line)
+                    tx = record["archive_tx_id"]
+                    if tx in actual:
+                        raise ValueError("duplicate JSONL archive record")
+                    actual[tx] = record
+            if actual != records:
+                raise ValueError("JSONL/database consistency check failed: " + kind)
+    except (sqlite3.DatabaseError, KeyError, TypeError) as e:
+        raise ValueError("invalid backup database or JSONL archive") from e
+    finally:
+        c.close()
+
+
+def restore(s, path, apply=False):
     with tempfile.TemporaryDirectory(prefix="workthread-restore-") as directory:
         stage = Path(directory)
-        manifest = extract_verified(path, password, stage)
+        manifest = extract_verified(path, stage)
         if manifest["scope"] == "full":
-            db = sqlite3.connect(stage / "data/workthread.sqlite3")
-            try:
-                if (
-                    db.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
-                    or db.execute("PRAGMA foreign_key_check").fetchall()
-                ):
-                    raise ValueError("invalid backup database")
-            finally:
-                db.close()
+            verify_snapshot(stage)
+        else:
+            document = json.loads((stage / "todos.json").read_text(encoding="utf-8"))
+            if not isinstance(document, dict) or any(
+                not isinstance(document.get(table), list) for table in TODO_TABLES
+            ):
+                raise ValueError("invalid To Do backup payload")
         if not apply:
             return {
                 "preview": True,
                 "manifest": manifest,
+                "files": [
+                    {"path": name, **info} for name, info in manifest["files"].items()
+                ],
                 "conflict_policy": "full: replace with rollback copy; todos: identical IDs skip, different IDs stop",
             }
         with s.lock:
             if manifest["scope"] == "todos":
                 data = json.loads((stage / "todos.json").read_text(encoding="utf-8"))
-                if manifest["schema_version"] < 2:
-                    for todo in data["todos"]:
-                        todo.setdefault("no_due_date", 0)
                 with s.db() as c:
                     for t in data["todos"]:
                         old = c.execute(
@@ -241,12 +382,14 @@ def restore(s, path, password, apply=False):
             rollback = s.root / ("restore-rollback-" + uid())
             rollback.mkdir()
             moved = []
+            touched = []
             try:
                 for name in ("data", "config", "agent-workspace"):
                     target = s.root / name
                     if target.exists():
                         target.rename(rollback / name)
                         moved.append(name)
+                    touched.append(name)
                     if (stage / name).exists():
                         shutil.copytree(stage / name, target)
                 s.archive_seen.clear()
@@ -268,7 +411,7 @@ def restore(s, path, password, apply=False):
                 if not restored.health()["ok"]:
                     raise ValueError("restore health check failed")
             except BaseException:
-                for name in ("data", "config", "agent-workspace"):
+                for name in reversed(touched):
                     target = s.root / name
                     if target.exists():
                         shutil.rmtree(target)

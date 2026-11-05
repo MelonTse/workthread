@@ -1,24 +1,22 @@
 import datetime as dt
-import sqlite3
 
 import pytest
 
-from workthread.core import DDL, VERSION, Store
+from workthread.core import VERSION, Store
 
 
-def test_capture_can_be_incomplete_but_human_edit_requires_deadline(tmp_path):
+def test_new_capture_requires_deadline_and_rejects_atomically(tmp_path):
     s = Store(tmp_path)
-    t = s.create_todo({"raw_input": "立即保存原始工作"})
-    assert t["due_date"] is None and not t["no_due_date"]
-    with pytest.raises(ValueError, match="截止日期"):
-        s.edit_todo(t["todo_id"], {"title": "详情修改"}, 1)
-    updated = s.edit_todo(t["todo_id"], {"due_date": "2026-12-01"}, 1)
-    assert updated["due_date"] == "2026-12-01" and not updated["no_due_date"]
+    with pytest.raises(ValueError, match="due_date / no_due_date"):
+        s.create_todo({"raw_input": "立即保存原始工作"})
+    assert not s.rows("SELECT * FROM todos")
+    assert not s.rows("SELECT * FROM todo_sources")
+    assert not s.rows("SELECT * FROM status_events")
 
 
 def test_indefinite_is_explicit_exclusive_and_human_protected(tmp_path):
     s = Store(tmp_path)
-    t = s.create_todo({"raw_input": "不设时限的工作"})
+    t = s.create_todo({"raw_input": "不设时限的工作", "no_due_date": True})
     t = s.edit_todo(t["todo_id"], {"no_due_date": True, "due_date": None}, 1)
     assert t["no_due_date"] and t["due_date"] is None
     with pytest.raises(ValueError):
@@ -54,29 +52,29 @@ def test_form_deadline_overrides_relative_words_and_is_protected(tmp_path, due, 
 
 
 def test_v1_migration_does_not_turn_unknown_deadline_into_indefinite(tmp_path):
-    old = tmp_path / "data"
-    old.mkdir()
-    c = sqlite3.connect(old / "workthread.sqlite3")
-    c.executescript(DDL.replace(", no_due_date INTEGER NOT NULL DEFAULT 0", ""))
-    c.execute("INSERT INTO schema_migrations VALUES (1,?)", ("synthetic",))
-    c.commit()
-    c.close()
+    s = Store(tmp_path)
+    t = s.create_todo({"raw_input": "历史工作原文", "no_due_date": True})
+    with s.db() as c:
+        c.execute("ALTER TABLE todos DROP COLUMN no_due_date")
+        c.execute("DELETE FROM schema_migrations")
+        c.execute("INSERT INTO schema_migrations VALUES (1,?)", ("synthetic",))
     s = Store(tmp_path)
     assert "no_due_date" in {r["name"] for r in s.rows("PRAGMA table_info(todos)")}
-    assert (
-        max(r["version"] for r in s.rows("SELECT version FROM schema_migrations"))
-        == VERSION
-        == 2
-    )
-    t = s.create_todo({"raw_input": "迁移后仍待填写"})
-    assert not t["no_due_date"] and t["due_date"] is None
+    assert max(r["version"] for r in s.rows("SELECT version FROM schema_migrations")) == VERSION == 2
+    historical = s.todo(t["todo_id"])
+    assert historical["due_date"] is None and historical["no_due_date"] == 0
+    assert historical["raw_input"] == "历史工作原文" and historical["revision"] == 1
+    with pytest.raises(ValueError, match="due_date"):
+        s.edit_todo(t["todo_id"], {"title": "必须补齐日期"}, 1)
+    assert s.todo(t["todo_id"]) == historical
+    s.edit_todo(t["todo_id"], {"due_date": "2026-12-01", "no_due_date": False}, 1)
 
 
 def test_manual_progress_defaults_to_recording_time_but_unknown_ai_time_stays_unknown(
     tmp_path,
 ):
     s = Store(tmp_path)
-    t = s.create_todo({"raw_input": "工作"})
+    t = s.create_todo({"raw_input": "工作", "no_due_date": True})
     s.progress(t["todo_id"], {"content": "当前登记的工作进展"})
     log = s.todo(t["todo_id"])["logs"][0]
     assert (
@@ -101,45 +99,16 @@ def test_invalid_indefinite_values_are_not_coerced_to_true(tmp_path):
     assert not s.rows("SELECT * FROM todos")
 
 
-def test_v1_todo_backup_restores_as_pending_deadline(tmp_path):
-    import hashlib
-    import json
-
-    import py7zr
-
+def test_old_7z_is_rejected_without_modifying_archive_or_destination(tmp_path):
     from workthread.operations import restore
 
-    s = Store(tmp_path / "source")
-    t = s.create_todo({"raw_input": "旧版待填写日期"})
-    document = {
-        table: s.rows("SELECT * FROM " + table)
-        for table in ("todos", "todo_sources", "progress_logs", "status_events")
-    }
-    document["todos"][0].pop("no_due_date")
-    stage = tmp_path / "old-package"
-    stage.mkdir()
-    payload = stage / "todos.json"
-    payload.write_text(json.dumps(document))
-    manifest = {
-        "format_version": 1,
-        "schema_version": 1,
-        "scope": "todos",
-        "created_at": "synthetic",
-        "files": {
-            "todos.json": {
-                "sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
-                "size": payload.stat().st_size,
-            }
-        },
-    }
-    (stage / "manifest.json").write_text(json.dumps(manifest))
-    archive = tmp_path / "old.7z"
-    with py7zr.SevenZipFile(
-        archive, "w", password="synthetic-test-password", header_encryption=True
-    ) as z:
-        z.write(payload, "todos.json")
-        z.write(stage / "manifest.json", "manifest.json")
+    archive = tmp_path / "historical.7z"
+    original = b"7z\xbc\xaf\x27\x1c" + b"synthetic historical test artifact"
+    archive.write_bytes(original)
     target = Store(tmp_path / "destination")
-    restore(target, archive, "synthetic-test-password", True)
-    restored = target.todo(t["todo_id"])
-    assert restored["due_date"] is None and restored["no_due_date"] == 0
+    t = target.create_todo({"raw_input": "keep original", "no_due_date": True})
+    before = target.todo(t["todo_id"])
+    with pytest.raises(ValueError, match="ZIP"):
+        restore(target, archive, apply=True)
+    assert archive.read_bytes() == original
+    assert target.todo(t["todo_id"]) == before

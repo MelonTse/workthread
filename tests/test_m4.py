@@ -1,5 +1,4 @@
 import re
-import pytest
 from workthread.core import Store
 from workthread.demo import seed
 from workthread.operations import backup, restore
@@ -51,20 +50,17 @@ def test_http_offline_capture_status_two_logs(tmp_path):
     )
 
 
-def test_backup_restore_both_different_paths_and_bad_password(tmp_path):
+def test_backup_restore_both_different_paths_without_password(tmp_path):
     s = Store(tmp_path / "原工作空间")
     seed(s)
-    password = "synthetic-password-2026"
     for scope in ("todos", "full"):
-        file = tmp_path / (scope + ".7z")
-        backup(s, file, password, scope)
+        file = tmp_path / (scope + ".zip")
+        backup(s, file, scope)
         dest = Store(tmp_path / ("新位置 " + scope))
         before = dest.health()
-        with pytest.raises(Exception):
-            restore(dest, file, "wrong password", True)
+        assert restore(dest, file)["preview"]
         assert dest.health() == before
-        assert restore(dest, file, password)["preview"]
-        assert restore(dest, file, password, True)["restored"]
+        assert restore(dest, file, apply=True)["restored"]
         assert len(dest.rows("SELECT * FROM todos")) == len(
             s.rows("SELECT * FROM todos")
         )
@@ -102,9 +98,9 @@ def test_http_ai_result_and_draft(tmp_path):
 def test_todo_backup_reimport_is_idempotent(tmp_path):
     s = Store(tmp_path / "a")
     seed(s)
-    file = tmp_path / "todos.7z"
-    backup(s, file, "password-for-test", "todos")
+    file = tmp_path / "todos.zip"
+    backup(s, file, "todos")
     target = Store(tmp_path / "b")
-    restore(target, file, "password-for-test", True)
-    restore(target, file, "password-for-test", True)
+    restore(target, file, apply=True)
+    restore(target, file, apply=True)
     assert len(target.rows("SELECT * FROM todos")) == len(s.rows("SELECT * FROM todos"))

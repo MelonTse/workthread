@@ -27,6 +27,7 @@ todo = obj(
         "action_key": dict(s, minLength=1),
         "priority": {"enum": ["low", "normal", "high", "urgent"]},
         "due_date": nullable,
+        "no_due_date": {"type": "boolean"},
         "completion_criteria": s,
     },
     ["title", "description", "action_key"],
@@ -148,6 +149,7 @@ intake = obj(
         "input_at": s,
         "input_timezone": s,
         "source_ref": s,
+        "due_date": nullable,
         "no_due_date": {"type": "boolean"},
     },
     [

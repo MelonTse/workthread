@@ -10,7 +10,7 @@ import platform
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
-output = root / "artifacts" / "WorkThread-1.0.0rc1-windows-x64"
+output = root / "artifacts" / "WorkThread-1.0.0rc2-windows-x64"
 if sys.platform != "win32":
     raise SystemExit(
         "Windows packaging must run on Windows; use native spec build only for Mac smoke tests"
@@ -24,6 +24,7 @@ for f in ("install.ps1", "upgrade.ps1"):
     shutil.copy2(root / "scripts" / f, output / "tools" / f)
 for src, dest in [
     ("portable-start.cmd", "Start.cmd"),
+    ("portable-install.cmd", "Install.cmd"),
     ("portable-health.cmd", "Health.cmd"),
     ("portable-backup.cmd", "Backup.cmd"),
     ("portable-restore.cmd", "Restore.cmd"),
@@ -55,7 +56,7 @@ for distribution in importlib.metadata.distributions():
     json.dumps({"python": sys.version, "packages": versions}, indent=2)
 )
 (output / "BUILD_INFO.json").write_text(json.dumps({
-    "version": "1.0.0rc1",
+    "version": "1.0.0rc2",
     "commit_sha": os.environ.get("GITHUB_SHA"),
     "runner_os": platform.system(),
     "machine": platform.machine(),

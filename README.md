@@ -2,9 +2,9 @@
 
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；WorkBuddy 负责分析。网页无需模型 API，可独立维护 To Do 和进展日志。
 
-当前版本：**1.0.0rc1**。Windows runner 的 49 项测试及冻结程序冒烟已通过，Mac 真实 WorkBuddy 合成文件交换已验证；Windows 用户电脑、真实 IMAP 与正式无人值守仍待验收。
+当前源码候选版本：**1.0.0rc2**，G1 已验收通过，G2 Mac 独立运行及发布前审核报告已生成，等待用户审核并批准 G3；尚未获得推送及 Windows 构建授权。rc1 的历史构建和真机测试不能替代 rc2 验收。报告见 `docs/GOAL002_MAC_ACCEPTANCE.md`、`docs/GOAL002_RELEASE_AUDIT.md`，G1 报告保留。
 
-Windows WorkBuddy 部署入口：[完整部署与真机验收提示词](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。提示词固定候选包、构建提交和 SHA-256，只用合成数据，不启用真实邮箱或正式定时任务。
+Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。部署入口：[全新部署与真机验收提示词（G1 草稿）](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。只用合成数据，真实邮箱与正式计划保持禁用。
 
 ## Mac 开发与合成演示
 
@@ -31,24 +31,24 @@ Windows WorkBuddy 部署入口：[完整部署与真机验收提示词](docs/WIN
 - 邮件页搜索历史与相关会话、查看分析建议、编辑和复制英文草稿、保存人工反馈。
 - 知识页按个人、客户、项目切换，并按对象查看与编辑。候选知识须确认；人工版本保留历史。
 - “请求 AI 分析”只生成任务。WorkBuddy 分析后，Python 导入结果。设置页的“导入模拟 AI 结果”仅适用于演示空间。
-- 设置页提供 To Do 独立备份、完整加密备份和恢复预览。恢复全量数据会保留回退目录，禁用邮箱与正式 AI 计划，要求重新授权。
+- 设置页提供 To Do 独立备份、完整普通 ZIP 备份和恢复前文件预览；全程无需密码。恢复全量数据会保留回退目录，禁用邮箱与正式 AI 计划，要求重新授权。
 
-## 测试与打包
+## 本地测试与后续构建（需分别获阶段批准）
 
 ```sh
 .venv/bin/python -m pytest -q
-.venv/bin/python -m PyInstaller --noconfirm packaging/workthread.spec
-.venv/bin/python scripts/smoke_frozen.py dist/WorkThread/WorkThread
+.venv/bin/python -m PyInstaller --noconfirm --workpath .runtime/goal002-g2/build --distpath .runtime/goal002-g2/dist packaging/workthread.spec
+.venv/bin/python scripts/smoke_frozen.py .runtime/goal002-g2/dist/WorkThread/WorkThread
 ```
 
-最后一条是 Mac 原生包测试。Windows 在 `.github/workflows/windows.yml` 的 Windows runner 构建，不能把 Mac 包改后缀当作 Windows 包。完整步骤见 `docs/WINDOWS_ACCEPTANCE.md`。
+上方 Mac 构建命令使用独立输出目录，保留既有 rc1 产物；该命令已在获批 G2 中验证。最后一条是 Mac 原生包测试。Windows 在 `.github/workflows/windows.yml` 的 Windows runner 构建，不能把 Mac 包改后缀当作 Windows 包。完整步骤见 `docs/WINDOWS_ACCEPTANCE.md`。
 
 ## 数据与凭证
 
 数据库、JSONL、队列、备份与本地依赖均被忽略。真实工作空间应放源码目录以外；开发测试仅用合成数据。IMAP 凭证写系统凭证库，不写配置或备份。没有明文凭证回退。
 
-默认不连接邮箱、不启动正式定时任务、不发邮件、不上传业务资料。设置邮箱后，只有明确手动同步或启用账号后台轮询才会连接。备份密码由用户保管，程序不保存。
+默认不连接邮箱、不启动正式定时任务、不发邮件、不上传业务资料。设置邮箱后，只有明确手动同步或启用账号后台轮询才会连接。备份使用普通 ZIP，保留 manifest、SHA-256、快照及恢复保护；历史 7z 不删除、不转换，新版不恢复旧加密格式。
 
-资料：`WORKBUDDY_SETUP.md`、`docs/ARCHITECTURE.md`、`docs/LEGACY_IMPORT.md`、`docs/TEST_REPORT.md`。
+当前部署与架构资料：`WORKBUDDY_SETUP.md`、`docs/ARCHITECTURE.md`。`docs/TEST_REPORT.md`、`RC_RELEASE_READINESS.md`、`GOAL_EXECUTION_REPORT.md` 和 `WORKBUDDY_INTEGRATION_TEST.md` 保留 rc1 历史记录，不作为 rc2 验收结论；`docs/LEGACY_IMPORT.md` 描述通用接口，本轮不执行旧项目导入。
 
 界面维护规则见 `docs/UI_GUIDELINES.md`。

@@ -4,13 +4,13 @@
 
 Flask/Waitress 仅监听 127.0.0.1。原生页面通过同源 /api/v1 操作；写请求带 CSRF 和版本信息。Python 负责唯一业务写入，WorkBuddy 只读任务并输出标准操作。没有模型 API 或邮件发送接口。
 
-模块：core.py（SQLite 领域服务、版本 1 迁移）、ai.py（JSON Schema、文件交换、对账）、mail.py（IMAP 正文分段与归档日志）、operations.py（加密备份、恢复、知识导入）、server.py（HTTP）、cli.py（本地命令与后台）、demo.py（合成适配器）。
+模块：core.py（SQLite 领域服务、版本 1 迁移）、ai.py（JSON Schema、文件交换、对账）、mail.py（IMAP 正文分段与归档日志）、operations.py（普通 ZIP 备份、恢复、知识导入）、server.py（HTTP）、cli.py（本地命令与后台）、demo.py（合成适配器）。
 
 ## 数据库
 
 schema_migrations 保存迁移版本，当前 v2 的 DDL 与迁移位于 core.py（v2 增加 no_due_date 标志）。更高版本数据库拒绝启动。外键、WAL、FULL synchronous；每个领域操作独立事务。跨平台 FileLock 对工作空间的全部数据库读写与备份、恢复加锁，支持同机 CLI 与服务协调；SQLite 事务负责提交。正式升级应先停止应用。
 
-To Do 的 due_date 与显式 no_due_date（无限期）互斥，原始捕获可待完善，人工详情保存须明确其一。持久保存需求中全部字段，另含 raw_input、input_at、input_timezone、revision、protected_fields、completion_policy 和 merged_into_id。三入口统一调用 create_todo；人工编辑保护实际变更字段。原始录入不可编辑。相对日期解释锚定原始录入时区，歧义进入审核。
+To Do 新建必须具有有效 due_date 或明确 no_due_date（无限期），两者互斥；历史未填写记录原样保留，人工编辑时须补齐截止设置。持久保存需求中全部字段，另含 raw_input、input_at、input_timezone、revision、protected_fields、completion_policy 和 merged_into_id。三入口统一调用 create_todo；人工编辑保护实际变更字段。原始录入不可编辑。相对日期解释锚定原始录入时区，歧义进入审核。
 
 progress_logs 与 status_events 分离。日志可为零或多条，追加或更正，不覆盖。合并保留原事项 tombstone 和 origin_todo_id。简单 reply_sent 完成规则要求绑定原 Message-ID、已发送文件夹、发件账号身份和明确引用；其他业务完成须人工确认。
 
@@ -36,6 +36,8 @@ API 路由可查 server.py：To Do、日志、合并建议、邮件检索与会�
 
 ## 一致性备份
 
-py7zr AES 加密内容与文件头。full 包使用 sqlite3.Connection.backup，配合归档锁与副本生成同一已提交状态。待执行任务以 ai_jobs 为准，恢复重建队列并更换 epoch，旧任务不能写入。To Do 包包含来源、状态、日志及引用摘要，相同 ID 不同内容整个导入拒绝；用户可恢复至新空间后确认合并。
+rc2 使用标准 ZIP，不含应用层密码或加密，不依赖 py7zr。manifest v2 含文件数、总大小与 SHA-256；校验 ZIP CRC、Windows 路径安全及文件集合，拒绝旧加密 7z。full 包使用 sqlite3.Connection.backup，配合归档锁与 JSONL/数据库一致性验证生成同一已提交状态。恢复仅回滚实际处理目录，保留原目录保护副本；优先恢复到新位置。待执行任务以 ai_jobs 为准，恢复重建队列并更换 epoch，旧任务不能写入。To Do 包包含来源、状态、日志及引用摘要，相同 ID 不同内容整个导入拒绝；用户可恢复至新空间后确认合并。
 
-SQLite 在线备份与跨进程工作空间锁共同协调快照。备份暂存期间其他写入等待；大归档可能延长等待时间。加密在复制完成后进行。恢复保留原目录作为回退。
+SQLite 在线备份与跨进程工作空间锁共同协调快照。备份暂存期间其他写入等待；大归档可能延长等待时间。普通 ZIP 压缩在一致性快照完成后进行，不执行应用层加密。恢复保留原目录作为回退。
+
+rc2 的新建与编辑截止日期在 core.validate_deadline 统一校验。历史空日期保持原状；新增业务写入不能保存 null/false。项目 Skills 位于 .workbuddy/skills，规则仍位于 CODEBUDDY.md 和 .codebuddy/rules；版本化初始化按哈希保护自定义文件并输出冲突候选，不推断客户端发现成功。

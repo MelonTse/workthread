@@ -8,6 +8,8 @@ backups/
 *.db
 *.jsonl
 *.7z
+*.zip
+acceptance/
 *.key
 *.pem
 *.p12

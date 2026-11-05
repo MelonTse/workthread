@@ -1,73 +1,103 @@
-# 新电脑 WorkBuddy 部署与恢复
+# WorkBuddy 项目部署（1.0.0rc2，本地修改候选）
 
-此文档是项目部署入口，不依赖旧电脑、旧会话、固定盘符或账号姓名。
+Goal002 G1 已验收通过；G2 进行 Mac 独立运行及发布前审核。Windows 构建、离线交付及真机验收须分别获 G3–G5 闸门批准。本文不构成安装、接入真实邮箱或启用定时任务的授权。
 
-## 1. 环境检查与初始化
+## 1. 环境与工作空间
 
-Windows 11 x64，当前用户可写目录，可用端口 8765、足够归档及备份空间。安装并登录官方 WorkBuddy。下载经授权的私有 Release，核对 SHA256SUMS.json，解压到可写目录。
+目标环境：Windows 10 Professional 22H2、build 19045、x64，WorkBuddy 5.9.3。程序包内带 Python，无需系统 Python、pip、Docker 或管理员权限。Windows 11 不作为唯一适用系统。当前 Mac 检查不能替代 Windows 真机结果。
 
-运行 `tools/install.ps1` 或 `app/WorkThread.exe --workspace workspace init`，再运行 `Health.cmd`。不要使用管理员权限，不在 Program Files 中保存工作数据。程序自带 Python；不需要安装 pip。
+统一部署路径：
 
-已有完整备份时使用 Restore.cmd 或网页恢复，先预览后应用；保留回退目录。重新授权 IMAP，运行健康检查。先保持账号同步禁用。
-
-## 2. 选择工作空间并加载配置
-
-在 WorkBuddy 新建独立本地任务，选择 `<工作台>/workspace/agent-workspace`，不要选含核心 data 目录的上级。检查当前版本支持的项目配置路径。
-
-依据当前官方项目文档，使用 `.codebuddy/rules/`、`.codebuddy/skills/<技能名>/SKILL.md` 和根 `CODEBUDDY.md`。初始化会复制规则、三个 Skills 与 JSON Schema。官方资料：https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Project
-
-项目级配置需按客户端提示信任后加载。只允许访问指定交换目录和执行下文列出的 WorkThread 受控命令。不要为业务分析授予全磁盘访问；不要打开其他项目。如果当前客户端不能限制权限，先用合成空间验证并保留人工确认，不直接启用无人值守。
-
-模板升级不会覆盖已存在规则。升级时比较新版本模板，备份自定义规则后人工合并，更新 rules_version；重新执行合成自检。
-
-## 3. 一次合成自检
-
-1. 用独立工作空间运行 `WorkThread.exe --workspace <合成空间> demo`。Mac 用 `.venv/bin/workthread --workspace .runtime/probe demo`。
-2. 点击“＋ To Do”直接打开完整表单，填写“联系示例客户”与截止日期或无限期；点击右下方“保存”，确认入库且窗口关闭。
-3. 网页请求分析，确认 exchange/inputs 出现完整 JSON。
-4. WorkBuddy 新会话加载 workthread-analysis Skill，按本项目规则处理一个输入文件，输出临时文件，完成后原子改名为 outputs/<job_id>.json。
-5. Python 服务自动消费结果；也可运行 `WorkThread.exe --workspace <合成空间> ai-consume`。
-6. 核对 receipts 回执、网页新增结果、日志及草稿。再次写入同一结果，确认无重复任务或日志。
-7. 人工修改 To Do 后导入旧结果，确认拒绝并标记 superseded。重新请求分析产生新任务。
-8. 全新聊天再次执行，确认无需旧会话上下文。保留客户端版本、权限、日志和截图作为证据。
-
-模拟适配器：设置页“模拟分析”，或 CLI `simulate`。**模拟通过不等于第 4、8 步真实 WorkBuddy 通过。** 2026-11-04 已在 Mac WorkBuddy 5.9.3 用独立合成空间验证真实输出、消费、重复安全、全新会话与过期拒绝，详见 WORKBUDDY_INTEGRATION_TEST.md；Windows 与正式无人值守仍须另行验收。草稿必须人工核对事实、附件是否存在及时间承诺。
-
-## 4. 正式每日任务（默认禁用）
-
-Windows 验收后，在 WorkBuddy 创建**本地**定时任务，工作空间指定 agent-workspace。频率每日一次，默认 09:00，可修改，时区与网页一致。不要创建云端任务，云端不能访问本机交换文件。
-
-任务提示词建议：
-
-> 加载 CODEBUDDY.md、workthread-analysis Skill 和 JSON Schema。先使用 WorkThread 的 ai-prepare 受控命令准备或取得 pending 任务，再处理 exchange/inputs 中未完成的任务；先检查 receipts，跳过已完成及过期实例。逐个输出标准 JSON，完整覆盖待办列表，等待 Python 导入回执。未完成队列下次继续，失败不标完成。不连接邮箱、不发送邮件、不修改核心数据库。
-
-命令使用当前包相对位置：从 agent-workspace 运行 `../../app/WorkThread.exe --workspace .. ai-prepare`；初始化或目录结构变化后先手动验证该命令。源码开发使用项目虚拟环境的 CLI 和显式 workspace。
-
-电脑需开机，WorkBuddy 需登录且运行，Python 网页服务需运行才能自动导入。错过执行不会清除 pending 文件。可以在 WorkBuddy 点击“立即运行”手工补跑。网页按钮仅入队，不声称能唤醒客户端。
-
-不要复制客户端内部调度数据库。新电脑按上述步骤重建任务，正式启用前再次验收。Python 的 ai_schedule 配置只保存计划参数，不是 WorkBuddy 调度器。
-
-## 5. 邮箱与 Python 后台
-
-通用 IMAP over TLS，默认 993，使用邮箱授权码。设置账号保持默认禁用，凭证只存当前电脑系统凭证库。自动发现收件箱、已发送文件夹失败时，填写服务器实际文件夹名；其他文件夹按需添加。
-
-手动同步验收后可在设置页点击“启用后台同步”开启后台轮询。间隔默认 15 分钟，与每日 AI 分析独立。后台跟随应用进程运行；关闭应用后停止。启动采用 Start.cmd，按需由用户配置登录时启动；本候选版不注册正式任务。
-
-## 6. 故障排查
-
-| 现象 | 检查与处理 |
+| 用途 | 路径 |
 |---|---|
-| 页面无法打开 | Health.cmd；8765 端口占用；可使用 serve --port 更换端口 |
-| 邮箱授权失败 | 重新授权码，检查主机、TLS、凭证库；不要把密码写到规则或日志 |
-| 找不到已发送文件夹 | 网页填写准确名称，先手动同步 |
-| 邮件部分失败 | sync_failures 保留失败 UID，下次重试；异常 MIME 不回退整封抓取 |
-| 结果被拒绝 | quarantine 中错误摘要；核对 Schema、邮件证据、revision、workspace_epoch |
-| superseded | 原任务已过期，重新请求分析，不篡改旧任务版本 |
-| 长时间 pending | 客户端登录、工作空间、规则加载、权限等待、正式计划是否启用 |
-| 恢复后不能同步 | 正常：重新授权，并明确启用账号 |
-| 磁盘不足 | 清理独立备份副本或扩容后重试；不要手工删除数据库 WAL 或归档日志 |
-| 升级失败 | 保留 app 回退目录，使用匹配版本与升级前加密备份恢复 |
+| 离线资料（不能作为 WorkBuddy 项目） | `F:\WorkThread-Offline-Deploy-V2` |
+| 新程序根目录 | `F:\WorkThread` |
+| 正式数据 | `F:\WorkThread\workspace` |
+| 正式 WorkBuddy 项目 | `F:\WorkThread\workspace\agent-workspace` |
+| 合成数据 | `F:\WorkThread\acceptance` |
+| 合成验收 WorkBuddy 项目 | `F:\WorkThread\acceptance\agent-workspace` |
 
-## 7. 完整迁移验收
+如果目标位置已有 rc1 程序或数据，停止并选择新的空目录；不解压覆盖，不自动迁移、删除或导入旧内容。`upgrade.ps1` 在 rc2 明确停止原地升级，不更改原程序和数据。
 
-旧电脑离线。新电脑安装 WorkBuddy→解压程序→恢复备份→重新授权→加载规则和 Skills→重建每日任务→健康检查→合成闭环→真实邮箱小范围验收。全部通过后才开启日常运行。
+## 2. 自动初始化两个空间
+
+取得经批准的 rc2 候选包并校验实际 SHA-256 后，在新目录完整解压，保留整个 app 目录。运行 `Install.cmd`，或在系统策略允许时运行 `tools\install.ps1`（PowerShell 5.1）；不降低执行策略。两个入口均对 workspace 和 acceptance 执行 init 与 doctor，不播种任何演示数据。
+
+单空间等价命令（显式路径，不依赖当前目录）：
+
+```powershell
+$WT_EXE = 'F:\WorkThread\app\WorkThread.exe'
+& $WT_EXE --workspace 'F:\WorkThread\workspace' init
+& $WT_EXE --workspace 'F:\WorkThread\acceptance' init
+```
+
+每个 agent-workspace 自动获得：
+
+```text
+CODEBUDDY.md
+.codebuddy/rules/workthread.md
+.workbuddy/skills/workthread-analysis/SKILL.md
+.workbuddy/skills/workthread-intake/SKILL.md
+.workbuddy/skills/workthread-knowledge/SKILL.md
+schemas/ai-input.json
+schemas/ai-output.json
+schemas/intake.json
+exchange/{inputs,outputs,intake,receipts,quarantine}/
+.workthread-deployment.json
+```
+
+部署报告包含模板版本、逐文件 installed/current/updated/custom_preserved、SHA-256 和冲突位置。已知原版 rc1 文件可更新；自定义规则、Skills 或 Schema 原样保留，新模板放在 `.workthread-updates/1.0.0rc2/` 供人工比较。init 遇冲突返回退出码 2，先人工合并后重试，不把有冲突的安装视为完成。遗留 `.codebuddy/skills` 不自动删除；如同名规则影响发现，应由用户审核后处理。
+
+## 3. 在 GUI 中打开正确项目并确认信任
+
+合成验收时，在 **WorkBuddy GUI 的 Open Folder／打开文件夹** 选择 `F:\WorkThread\acceptance\agent-workspace`，按客户端提示确认对该目录的信任。不要选择离线资料目录或包含核心数据库的上级目录。未来正式使用选择 `F:\WorkThread\workspace\agent-workspace`。
+
+打开新会话，分别核查：
+
+1. 项目规则实际加载，能指出当前项目及 rc2 规则版本、文件交换限制和人工保护。
+2. 客户端实际可用 Skill 列表分别包含三个名称，保留列表/注册表证据。
+3. 按业务语义分别实际调用三个 Skill，保留真实工具调用记录。
+4. 新开独立会话，重新验证发现和自动选择；不依赖旧聊天。
+5. 检查 Python completed 或 intake saved 回执，以及网页数据。
+
+**文件存在、读取 SKILL.md、模型自报成功均不能替代第 2、3 步。** 缺失时报告“Skill 不可用”，检查工作空间、信任、启用状态及目录。不得改 app.asar、客户端缓存或全局 Skills 作为替代。
+
+职责映射已写入 CODEBUDDY.md：邮件分析/分类/关联/英文草稿/To Do 对账调用 workthread-analysis；对话新增 To Do 调用 workthread-intake；个人习惯/客户要求/项目知识维护调用 workthread-knowledge。用户正常提问无需每次指定 Skill 名称。
+
+目录依据：优先采用用户提供的 WorkBuddy 5.9.3 Windows 验收目标 `.workbuddy/skills`。截至 2026-11-05，官方[项目文档](https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Project)仍列 `.codebuddy/skills` 兼容代码开发配置；该差异需在 G5 用实际客户端列表及调用记录判定。Mac 模板测试只证明部署正确。
+
+## 4. 合成业务与 AI 文件交换
+
+仅在获相应阶段授权后启动合成空间：
+
+```powershell
+& $WT_EXE --workspace 'F:\WorkThread\acceptance' demo --port 8766 --open
+```
+
+`Start.cmd` 使用正式 workspace 和端口 8765；合成 demo 服务独立使用 acceptance/8766。正式空间保持空白。演示生成的分析明确标记 SIMULATED，不算真实 WorkBuddy 证据。
+
+网页请求分析只排队，不保证唤醒客户端。WorkBuddy 使用输入 JSON、项目规则、Schema 和对应 Skill；完整输出先写临时文件，再原子改名为 `exchange/outputs/<job_id>.json`。Python 服务消费并写 receipts；没有回执只报告等待入库。
+
+原文、input_at、input_timezone 保留。新事项必须具有有效 due_date 且 no_due_date=false，或用户明确选 null/true；null/false 和日期/true 均拒绝。缺日期先确认，不虚构日期、不默认无限期；不明邮件建议保留为待确认文字。旧记录保留原状，人工编辑时补齐截止设置。AI 不得覆盖人工字段，不得把回复动作当作业务完结。
+
+源包中的受控命令可使用已核对的绝对 EXE 路径：ai-prepare、ai-consume、doctor。分析工作空间只读输入/规则/Schema，向 outputs/intake 写 JSON；不直接读写数据库或其他项目。凭证不写规则，不发送邮件。
+
+## 5. 普通 ZIP 备份与新目录恢复
+
+两类文件默认命名 `WorkThread-Todos-日期.zip`、`WorkThread-Full-日期.zip`。网页、API、CLI 的备份、预览、恢复均无密码。`Backup.cmd` 默认创建完整 ZIP 到 workspace/backups。指定合成空间示例：
+
+```powershell
+& $WT_EXE --workspace 'F:\WorkThread\acceptance' backup 'F:\WorkThread\backups\WorkThread-Todos-test.zip' --scope todos
+& $WT_EXE --workspace 'F:\WorkThread\acceptance' backup 'F:\WorkThread\backups\WorkThread-Full-test.zip' --scope full
+& $WT_EXE --workspace 'F:\WorkThread\restored-full' restore 'F:\WorkThread\backups\WorkThread-Full-test.zip'
+# 预览通过、核对新恢复位置后：
+& $WT_EXE --workspace 'F:\WorkThread\restored-full' restore 'F:\WorkThread\backups\WorkThread-Full-test.zip' --apply
+```
+
+可用普通 ZIP 工具查看；完整备份使用 SQLite Backup API、归档锁及 JSONL 一致性检查。manifest v2 包含 SHA-256、大小、文件数；恢复先检查 ZIP、路径、manifest、哈希和数据库。完整恢复保留原目录保护副本，失败按实际处理目录回滚。邮箱与正式 AI 计划恢复后禁用，epoch 更新，旧结果失效。
+
+优先恢复到新的空目录。`Restore.cmd` 明确要求新目标并先预览；网页恢复当前选中的空间会保留保护副本，仅在明确核对目标后操作。To Do 恢复遇不同内容同 ID 会整笔回滚。不要覆盖原备份或复制正在写入的 SQLite 文件。历史 todos.7z/full.7z 不删除、不转换、不猜密码；rc2 仅恢复新版普通 ZIP。
+
+## 6. 阶段边界
+
+G1 只完成本地程序、合成测试及静态适配。G2 审核 Mac 独立构建与提交集合；G3 获批后才推送并构建 Windows；G4 获批后制作完整离线包；G5 由 Windows WorkBuddy 真机验收，分别证明规则加载、三个 Skills 发现/调用、新会话和真实入库回执。本轮不连接真实 IMAP、不创建正式定时任务、不读取旧版 Shelley 项目。

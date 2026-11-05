@@ -41,6 +41,26 @@ class Conflict(ValueError):
     pass
 
 
+class DeadlineError(ValueError):
+    fields = ("due_date", "no_due_date")
+
+
+def validate_deadline(due_date, no_due_date):
+    """The same final-state rule applies to every To Do writer."""
+    if type(no_due_date) not in (bool, int) or no_due_date not in (0, 1):
+        raise DeadlineError("no_due_date：无限期必须是明确的布尔选择")
+    if due_date is not None:
+        try:
+            if not isinstance(due_date, str) or dt.date.fromisoformat(due_date).isoformat() != due_date:
+                raise ValueError
+        except ValueError:
+            raise DeadlineError("due_date：截止日期必须是有效的 YYYY-MM-DD 日期或 null") from None
+    if due_date is not None and no_due_date:
+        raise DeadlineError("due_date / no_due_date：截止日期与无限期不能同时设置")
+    if due_date is None and not no_due_date:
+        raise DeadlineError("due_date / no_due_date：请填写截止日期或明确选择无限期")
+
+
 DDL = """
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -255,12 +275,12 @@ class Store:
         tid = p.get("todo_id") or uid()
         tz = p.get("input_timezone", self.setting("timezone"))
         at = p.get("input_at", t)
-        explicit_deadline = source == "html" and bool(
-            p.get("due_date") or p.get("no_due_date")
-        )
-        due, ambiguous = (None, False) if explicit_deadline else self.relative_date(raw, at, tz)
+        explicit_deadline = bool({"due_date", "no_due_date"}.intersection(p))
+        due, ambiguous = self.relative_date(raw, at, tz)
+        if source == "html" and explicit_deadline:
+            due, ambiguous = None, False
         if due and p.get("due_date") and due != p["due_date"]:
-            raise ValueError("relative date disagrees with original input time")
+            raise DeadlineError("due_date: relative date disagrees with original input time")
         priority = p.get("priority", "normal")
         status = p.get("status", "inbox")
         if priority not in PRIORITIES or status not in STATUSES:
@@ -276,10 +296,9 @@ class Store:
                 ).fetchone()
             ):
                 raise ValueError("unknown " + field)
-        if type(p.get("no_due_date", False)) not in (bool, int) or p.get(
-            "no_due_date", False
-        ) not in (0, 1):
-            raise ValueError("无限期必须是明确的布尔选择")
+        deadline_date = p.get("due_date") if explicit_deadline else due
+        indefinite = p.get("no_due_date", False)
+        validate_deadline(deadline_date, indefinite)
         values = {
             "todo_id": tid,
             "title": p.get("title") or raw.splitlines()[0][:100],
@@ -293,8 +312,8 @@ class Store:
             "case_id": p.get("case_id"),
             "owner": p.get("owner", "local-user"),
             "priority": priority,
-            "due_date": due or p.get("due_date"),
-            "no_due_date": int(bool(p.get("no_due_date", False))),
+            "due_date": deadline_date,
+            "no_due_date": int(indefinite),
             "status": status,
             "completion_criteria": p.get("completion_criteria", "由用户确认工作完成"),
             "completion_policy": dumps(p.get("completion_policy", {"type": "manual"})),
@@ -309,10 +328,6 @@ class Store:
             "created_at": t,
             "updated_at": t,
         }
-        if values["no_due_date"] and values["due_date"]:
-            raise ValueError("截止日期与无限期不能同时设置")
-        if values["due_date"]:
-            dt.date.fromisoformat(values["due_date"])
         c.execute(
             f"INSERT INTO todos ({','.join(values)}) VALUES ({','.join('?' for _ in values)})",
             tuple(values.values()),
@@ -376,8 +391,6 @@ class Store:
             raise ValueError("invalid status")
         if "priority" in p and p["priority"] not in PRIORITIES:
             raise ValueError("invalid priority")
-        if p.get("due_date"):
-            dt.date.fromisoformat(p["due_date"])
         for field, table in [("customer_id", "customers"), ("case_id", "cases")]:
             if (
                 p.get(field)
@@ -394,12 +407,7 @@ class Store:
             return False
         deadline_date = p.get("due_date", row["due_date"])
         indefinite = p.get("no_due_date", row["no_due_date"])
-        if type(indefinite) not in (bool, int) or indefinite not in (0, 1):
-            raise ValueError("无限期必须是明确的布尔选择")
-        if deadline_date and indefinite:
-            raise ValueError("请选择截止日期或无限期，不能同时设置")
-        if human and not deadline_date and not indefinite:
-            raise ValueError("请先填写截止日期或选择无限期")
+        validate_deadline(deadline_date, indefinite)
         if human:
             protected.update(p)
             if {"due_date", "no_due_date"}.intersection(p):
@@ -635,7 +643,7 @@ class Store:
 
         space_ok = shutil.disk_usage(self.root).free > 100 * 1024 * 1024
         return {
-            "version": "1.0.0rc1",
+            "version": "1.0.0rc2",
             "python": sys.version.split()[0],
             "schema_version": VERSION,
             "disk_space_ok": space_ok,

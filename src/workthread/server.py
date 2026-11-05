@@ -8,9 +8,9 @@ from urllib.parse import urlparse
 import nh3
 from flask import Flask, request, jsonify, render_template, session, send_file
 from jsonschema import ValidationError
-from .core import Conflict, now, uid, dumps
+from .core import Conflict, DeadlineError, now, uid, dumps
 from .ai import Bridge
-from .operations import backup, restore, import_legacy, undo_import
+from .operations import backup, backup_filename, restore, import_legacy, undo_import
 
 
 def create_app(store):
@@ -58,7 +58,10 @@ def create_app(store):
     @app.errorhandler(KeyError)
     @app.errorhandler(ValidationError)
     def invalid(e):
-        return jsonify(error=str(e)[:500]), 400
+        result = {"error": str(e)[:500]}
+        if isinstance(e, DeadlineError):
+            result["fields"] = list(e.fields)
+        return jsonify(result), 400
 
     @app.errorhandler(Exception)
     def unexpected(e):
@@ -394,9 +397,13 @@ def create_app(store):
     def download_backup():
         p = request.get_json()
         directory = tempfile.TemporaryDirectory(prefix="workthread-download-")
-        file = Path(directory.name) / ("workthread-" + p["scope"] + ".7z")
-        backup(store, file, p["password"], p["scope"])
-        response = send_file(file, as_attachment=True, download_name=file.name)
+        file = Path(directory.name) / backup_filename(p["scope"])
+        try:
+            backup(store, file, p["scope"])
+            response = send_file(file, as_attachment=True, download_name=file.name, mimetype="application/zip")
+        except BaseException:
+            directory.cleanup()
+            raise
         response.call_on_close(directory.cleanup)
         return response
 
@@ -404,12 +411,11 @@ def create_app(store):
     def upload_restore():
         f = request.files["file"]
         with tempfile.TemporaryDirectory(prefix="workthread-upload-") as directory:
-            path = Path(directory) / "input.7z"
+            path = Path(directory) / "input.zip"
             f.save(path)
             result = restore(
                 store,
                 path,
-                request.form["password"],
                 request.form.get("apply") == "true",
             )
         return jsonify(result)

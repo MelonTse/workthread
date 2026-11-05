@@ -1,5 +1,8 @@
 @echo off
+setlocal
+chcp 65001 >nul
 cd /d "%~dp0"
-set /p "WT_BACKUP_DEST=Backup output path (.7z): "
-app\WorkThread.exe --workspace "%~dp0workspace" backup "%WT_BACKUP_DEST%"
+echo Creates a full ordinary ZIP in workspace\backups with a dated WorkThread-Full filename.
+app\WorkThread.exe --workspace "%~dp0workspace" backup
+if errorlevel 1 echo Backup failed; keep the existing backup files.
 pause

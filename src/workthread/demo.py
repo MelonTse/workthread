@@ -213,19 +213,7 @@ def simulated_result(job):
                 "evidence": evidence,
             }
         )
-        r["operations"].append(
-            {
-                "operation_id": uid(),
-                "type": "create_todo",
-                "payload": {
-                    "title": "准备 Aurora 检查清单",
-                    "description": "合成邮件提出的后续工作",
-                    "action_key": "prepare-checklist",
-                    "completion_criteria": "检查清单已核对并提交",
-                },
-                "evidence": evidence,
-            }
-        )
+        r["warnings"].append("合成邮件未给出明确截止日期：检查清单新增 To Do 建议待人工确认，不编造日期或无限期。")
         if todos:
             r["operations"].append(
                 {

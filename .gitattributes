@@ -1,0 +1,4 @@
+# Keep byte-hashed templates and schemas identical on every checkout platform.
+workbuddy_template/** text eol=lf
+src/workthread/schemas/*.json text eol=lf
+tests/fixtures/*.json text eol=lf

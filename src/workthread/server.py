@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import nh3
 from flask import Flask, request, jsonify, render_template, session, send_file
 from jsonschema import ValidationError
+from werkzeug.wsgi import ClosingIterator
 from .core import Conflict, DeadlineError, now, uid, dumps
 from .ai import Bridge
 from .operations import backup, backup_filename, restore, import_legacy, undo_import
@@ -404,7 +405,9 @@ def create_app(store):
         except BaseException:
             directory.cleanup()
             raise
-        response.call_on_close(directory.cleanup)
+        # send_file uses direct_passthrough: retain cleanup on the WSGI iterator,
+        # which closes the open file before removing its directory on Windows.
+        response.response = ClosingIterator(response.response, directory.cleanup)
         return response
 
     @app.post("/api/v1/restore")

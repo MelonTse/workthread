@@ -210,6 +210,7 @@ def test_http_zip_download_preview_restore_has_no_password(tmp_path, scope):
         "WorkThread-" + ("Todos" if scope == "todos" else "Full") + "-"
     ) in download.headers["Content-Disposition"]
     archive = download.data
+    download.close()
     assert zipfile.is_zipfile(io.BytesIO(archive))
     target = Store(tmp_path / "target")
     c, h = client(target)

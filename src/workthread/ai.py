@@ -31,7 +31,35 @@ class Bridge:
         self.s = store
         self.exchange = store.root / "agent-workspace" / "exchange"
 
-    def prepare(self, kind="reconcile", historical=False):
+    def queue_draft_rewrite(self, draft_id):
+        """Queue one saved draft with its exact feedback; never invoke a model."""
+        with self.s.lock:
+            drafts = self.s.rows("SELECT * FROM drafts WHERE draft_id=?", (draft_id,))
+            if not drafts or not drafts[0]["message_id"]:
+                raise ValueError("草稿未关联原邮件，无法加入重写队列")
+            draft = drafts[0]
+            if not self.s.rows("SELECT message_id FROM messages WHERE message_id=?", (draft["message_id"],)):
+                raise ValueError("找不到草稿对应的原邮件")
+            feedback = self.s.rows(
+                "SELECT * FROM feedback WHERE target_id=? ORDER BY created_at, feedback_id",
+                (draft_id,),
+            )
+            rewrite = {
+                "draft_id": draft_id,
+                "message_id": draft["message_id"],
+                "revision": draft["revision"],
+                "subject": draft["subject"],
+                "body": draft["body"],
+                "feedback": feedback,
+                "instruction": "根据这份已保存草稿及其反馈生成新的回复草稿，使用 create_draft；不发送邮件，不修改 To Do。",
+            }
+            for pending in self.s.rows("SELECT job_id, input_json FROM ai_jobs WHERE state='pending'"):
+                if load(pending["input_json"])["context"].get("draft_rewrite") == rewrite:
+                    return {"queued": [{"job_id": pending["job_id"]}], "existing": True}
+            jobs = self.prepare(rewrite_draft=rewrite)
+            return {"queued": [{"job_id": job["job_id"]} for job in jobs], "existing": False}
+
+    def prepare(self, kind="reconcile", historical=False, *, rewrite_draft=None):
         if kind not in ("reconcile", "normalize", "historical"):
             raise ValueError("unknown job type")
         active = self.s.rows(
@@ -43,7 +71,7 @@ class Bridge:
             "SELECT input_json FROM ai_jobs WHERE state='completed'"
         ):
             previous = load(completed["input_json"])
-            if previous["scope"]["historical"] == historical:
+            if previous["scope"]["historical"] == historical and not previous["context"].get("draft_rewrite"):
                 analyzed.update(
                     m["message_id"] for m in previous["context"]["messages"]
                 )
@@ -54,6 +82,13 @@ class Bridge:
             if not historical
             else [m for m in mails if (m["internal_date"] or "") < cutoff]
         )
+        if rewrite_draft is not None:
+            # Explicit rewrite requests include already analyzed / older mail too.
+            # They are separate from pending general jobs so new feedback is not lost.
+            active = []
+            mails = self.s.rows(
+                "SELECT * FROM messages WHERE message_id=?", (rewrite_draft["message_id"],)
+            )
         jobs = []
         # Every open task is covered in bounded pages; each page contains its evidence.
         for offset in range(0, max(len(active), len(mails), 1), 20):
@@ -114,6 +149,8 @@ class Bridge:
                 ),
                 "profile": self.s.setting("profile"),
             }
+            if rewrite_draft is not None:
+                context["draft_rewrite"] = rewrite_draft
             job = {
                 "schema_version": "1.0",
                 "workspace_id": self.s.setting("workspace_id"),

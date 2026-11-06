@@ -6,6 +6,12 @@
 
 Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。部署入口：[全新部署与真机验收提示词（rc3 R0）](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。只用合成数据，真实邮箱与正式计划保持禁用。
 
+## v3 UI 源码更新
+
+已按确认的 v3 样板落实五页 UI，包含可折叠导航、统计筛选、连续切换 To Do 详情和宽屏邮件并排。按钮“加入 AI 分析队列 / 加入 AI 重写队列”只写入待处理文件，仍由 WorkBuddy 执行。未保存草稿须先保存再入队。
+
+这次更新位于 `codex/workthread-ui-v3`，基于已构建的 rc3 源码；此前 rc3 安装包及离线资料不因源码更新自动变化。实施和验证见 [UI v3 报告](docs/UI_V3_IMPLEMENTATION_REPORT.md)，界面规范见 [UI Guidelines](docs/UI_GUIDELINES.md)。
+
 ## Mac 开发与合成演示
 
 ```sh

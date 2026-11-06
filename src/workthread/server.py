@@ -9,7 +9,7 @@ import nh3
 from flask import Flask, request, jsonify, render_template, session, send_file
 from jsonschema import ValidationError
 from werkzeug.wsgi import ClosingIterator
-from .core import Conflict, DeadlineError, now, uid, dumps
+from .core import Conflict, DeadlineError, now, uid, dumps, load
 from .ai import Bridge
 from .operations import backup, backup_filename, restore, import_legacy, undo_import
 
@@ -75,8 +75,10 @@ def create_app(store):
 
     @app.get("/")
     def home():
+        from . import __version__
+
         session["csrf"] = session.get("csrf") or secrets.token_hex(32)
-        return render_template("index.html", csrf=session["csrf"])
+        return render_template("index.html", csrf=session["csrf"], version=__version__)
 
     @app.get("/api/v1/snapshot")
     def snapshot():
@@ -223,7 +225,11 @@ def create_app(store):
 
     @app.post("/api/v1/ai/jobs")
     def prepare():
-        pending = store.rows("SELECT job_id FROM ai_jobs WHERE state='pending'")
+        pending = [
+            {"job_id": row["job_id"]}
+            for row in store.rows("SELECT job_id, input_json FROM ai_jobs WHERE state='pending'")
+            if not load(row["input_json"])["context"].get("draft_rewrite")
+        ]
         if pending:
             return jsonify({"queued": pending, "existing": True})
         jobs = b.prepare(
@@ -290,6 +296,10 @@ def create_app(store):
             draft_id=did,
             message_id=draft["message_id"],
         ), 201
+
+    @app.post("/api/v1/drafts/<did>/queue")
+    def queue_draft(did):
+        return jsonify(b.queue_draft_rewrite(did))
 
     @app.post("/api/v1/knowledge")
     def knowledge():

@@ -48,6 +48,15 @@ def install_templates(store):
                 for p in (Path(__file__).parent / "schemas").glob("*.json")
             }
         )
+        required_skills = {
+            f".codebuddy/skills/{name}/SKILL.md"
+            for name in ("workthread-analysis", "workthread-intake", "workthread-knowledge")
+        }
+        if not required_skills.issubset(files):
+            raise ValueError("Missing required .codebuddy/skills templates")
+        for name, expected in metadata["file_hashes"].items():
+            if name not in files or hashlib.sha256(files[name].read_bytes()).hexdigest() != expected:
+                raise ValueError("Template resource hash mismatch: " + name)
         report = {
             "template_version": version,
             "previous_version": previous.get("template_version"),
@@ -55,7 +64,22 @@ def install_templates(store):
             "files": [],
             "conflicts": [],
             "managed_files": {},
+            "legacy_files": [],
         }
+        # Inactive rc2 paths are reported, never removed or promoted to new paths.
+        old_reports = {row["path"]: row for row in previous.get("legacy_files", [])}
+        for name in sorted(p.replace(".codebuddy/", ".workbuddy/", 1) for p in required_skills):
+            legacy = dest / name
+            if legacy.is_file():
+                prior = old_reports.get(name, {})
+                recorded_hash = hashes.get(name) or (
+                    prior.get("sha256") if prior.get("status") == "preserved" else None
+                )
+                actual = hashlib.sha256(legacy.read_bytes()).hexdigest()
+                report["legacy_files"].append({
+                    "path": name, "sha256": actual,
+                    "status": "preserved" if actual == recorded_hash else "custom_preserved",
+                })
         for name, origin in sorted(files.items()):
             target = dest / name
             content = origin.read_bytes()
@@ -68,6 +92,7 @@ def install_templates(store):
             known = {
                 hashes.get(name),
                 metadata.get("previous_hashes", {}).get(name),
+                metadata.get("rc2_previous_hashes", {}).get(name),
             } - {None}
             if actual is None or actual in known:
                 if actual != expected:
@@ -99,7 +124,10 @@ def install_templates(store):
             )
         for name in ("inputs", "outputs", "receipts", "quarantine", "intake"):
             (dest / "exchange" / name).mkdir(parents=True, exist_ok=True)
-        report["ready"] = not report["conflicts"]
+        report["missing_skills"] = [
+            name for name in sorted(required_skills) if not (dest / name).is_file()
+        ]
+        report["ready"] = not report["conflicts"] and not report["missing_skills"]
         report["client_discovery"] = (
             "requires WorkBuddy skill-list and real invocation verification"
         )

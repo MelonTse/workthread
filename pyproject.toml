@@ -1,6 +1,6 @@
 [project]
 name = "workthread"
-version = "1.0.0rc2"
+version = "1.0.0rc3"
 description = "Local personal AI workbench"
 requires-python = ">=3.13,<3.14"
 dependencies = ["flask>=3.1,<4", "waitress>=3,<4", "jsonschema>=4.23,<5", "imapclient>=3,<4", "keyring>=25,<26", "nh3>=0.3,<1", "filelock>=3.20,<4", "tzdata>=2026.1"]

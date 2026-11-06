@@ -120,7 +120,7 @@ class Bridge:
                 "workspace_epoch": self.s.setting("workspace_epoch"),
                 "job_id": uid(),
                 "job_type": kind,
-                "rules_version": "1.0.0rc2",
+                "rules_version": "1.0.0rc3",
                 "created_at": now(),
                 "timezone": self.s.setting("timezone"),
                 "scope": {

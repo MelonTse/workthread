@@ -80,7 +80,7 @@ def test_plain_zip_hashes_preview_independent_restore_and_restart(tmp_path, scop
         assert all(
             (
                 destination.root
-                / "agent-workspace/.workbuddy/skills"
+                / "agent-workspace/.codebuddy/skills"
                 / skill
                 / "SKILL.md"
             ).exists()

@@ -19,7 +19,7 @@ def test_cli_health_and_resources(tmp_path):
     )
     assert result.returncode == 0 and '"ok": true' in result.stdout
     assert (
-        tmp_path / "agent-workspace/.workbuddy/skills/workthread-analysis/SKILL.md"
+        tmp_path / "agent-workspace/.codebuddy/skills/workthread-analysis/SKILL.md"
     ).exists()
     assert (tmp_path / "agent-workspace/schemas/ai-output.json").exists()
 

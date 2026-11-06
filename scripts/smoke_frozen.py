@@ -9,8 +9,10 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from check_bundle import check_bundle
 
 exe = Path(sys.argv[1]).resolve()
+check_bundle(exe.parent, Path(__file__).resolve().parents[1])
 with tempfile.TemporaryDirectory(prefix="workthread smoke 中文 ") as tmp:
     workspace = Path(tmp) / "workspace"
     process = subprocess.Popen(
@@ -85,6 +87,10 @@ with tempfile.TemporaryDirectory(prefix="workthread smoke 中文 ") as tmp:
         restored = json.load(opener.open("http://127.0.0.1:18765/api/v1/todos/" + tid))
         assert restored["status"] == "in_progress" and len(restored["logs"]) == 2
         assert (workspace / "agent-workspace/schemas/ai-output.json").exists()
+        for name in ("workthread-analysis", "workthread-intake", "workthread-knowledge"):
+            deployed = workspace / "agent-workspace/.codebuddy/skills" / name / "SKILL.md"
+            assert deployed.read_bytes() == (exe.parent / "_internal/workthread/resources/workbuddy_template/.codebuddy/skills" / name / "SKILL.md").read_bytes()
+        assert not (workspace / "agent-workspace/.workbuddy/skills").exists()
         print(
             "Frozen native startup, HTML/JS, schemas, SQLite, plain ZIP full backup and restore: passed"
         )

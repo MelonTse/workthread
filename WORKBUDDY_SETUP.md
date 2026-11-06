@@ -1,6 +1,6 @@
-# WorkBuddy 项目部署（1.0.0rc2，本地修改候选）
+# WorkBuddy 项目部署（1.0.0rc3，本地修改候选）
 
-Goal002 G1 已验收通过；G2 进行 Mac 独立运行及发布前审核。Windows 构建、离线交付及真机验收须分别获 G3–G5 闸门批准。本文不构成安装、接入真实邮箱或启用定时任务的授权。
+当前只执行 rc3 R0 本地修复。rc3 Windows 构建、离线交付须分别获 R1/R2 闸门批准，真机安装另行批准。本文不构成安装、接入真实邮箱或启用定时任务的授权。
 
 ## 1. 环境与工作空间
 
@@ -17,11 +17,11 @@ Goal002 G1 已验收通过；G2 进行 Mac 独立运行及发布前审核。Wind
 | 合成数据 | `F:\WorkThread\acceptance` |
 | 合成验收 WorkBuddy 项目 | `F:\WorkThread\acceptance\agent-workspace` |
 
-如果目标位置已有 rc1 程序或数据，停止并选择新的空目录；不解压覆盖，不自动迁移、删除或导入旧内容。`upgrade.ps1` 在 rc2 明确停止原地升级，不更改原程序和数据。
+如果目标位置已有 rc1 程序或数据，停止并选择新的空目录；不解压覆盖，不自动迁移、删除或导入旧内容。`upgrade.ps1` 在 rc3 明确停止原地升级，不更改原程序和数据。
 
 ## 2. 自动初始化两个空间
 
-取得经批准的 rc2 候选包并校验实际 SHA-256 后，在新目录完整解压，保留整个 app 目录。运行 `Install.cmd`，或在系统策略允许时运行 `tools\install.ps1`（PowerShell 5.1）；不降低执行策略。两个入口均对 workspace 和 acceptance 执行 init 与 doctor，不播种任何演示数据。
+取得经批准的 rc3 候选包并校验实际 SHA-256 后，在新目录完整解压，保留整个 app 目录。运行 `Install.cmd`，或在系统策略允许时运行 `tools\install.ps1`（PowerShell 5.1）；不降低执行策略。两个入口均对 workspace 和 acceptance 执行 init 与 doctor，不播种任何演示数据。
 
 单空间等价命令（显式路径，不依赖当前目录）：
 
@@ -36,9 +36,9 @@ $WT_EXE = 'F:\WorkThread\app\WorkThread.exe'
 ```text
 CODEBUDDY.md
 .codebuddy/rules/workthread.md
-.workbuddy/skills/workthread-analysis/SKILL.md
-.workbuddy/skills/workthread-intake/SKILL.md
-.workbuddy/skills/workthread-knowledge/SKILL.md
+.codebuddy/skills/workthread-analysis/SKILL.md
+.codebuddy/skills/workthread-intake/SKILL.md
+.codebuddy/skills/workthread-knowledge/SKILL.md
 schemas/ai-input.json
 schemas/ai-output.json
 schemas/intake.json
@@ -46,7 +46,7 @@ exchange/{inputs,outputs,intake,receipts,quarantine}/
 .workthread-deployment.json
 ```
 
-部署报告包含模板版本、逐文件 installed/current/updated/custom_preserved、SHA-256 和冲突位置。已知原版 rc1 文件可更新；自定义规则、Skills 或 Schema 原样保留，新模板放在 `.workthread-updates/1.0.0rc2/` 供人工比较。init 遇冲突返回退出码 2，先人工合并后重试，不把有冲突的安装视为完成。遗留 `.codebuddy/skills` 不自动删除；如同名规则影响发现，应由用户审核后处理。
+部署报告包含模板版本、逐文件 installed/current/updated/custom_preserved、SHA-256 和冲突位置。已知原版 rc1 文件可更新；自定义规则、Skills 或 Schema 原样保留，新模板放在 `.workthread-updates/1.0.0rc3/` 供人工比较。init 遇冲突返回退出码 2，先人工合并后重试，不把有冲突的安装视为完成。旧 rc2 `.workbuddy/skills` 文件不删除、不搬动；旧 managed_files 对应文件以 legacy_files 记录 preserved/custom_preserved，新 managed_files 仅登记有效路径。旧自定义内容不自动复制到新路径；需用户人工合并。正式 `.codebuddy/skills` 的自定义内容报冲突并使 ready=false。
 
 ## 3. 在 GUI 中打开正确项目并确认信任
 
@@ -54,7 +54,7 @@ exchange/{inputs,outputs,intake,receipts,quarantine}/
 
 打开新会话，分别核查：
 
-1. 项目规则实际加载，能指出当前项目及 rc2 规则版本、文件交换限制和人工保护。
+1. 项目规则实际加载，能指出当前项目及 rc3 规则版本、文件交换限制和人工保护。
 2. 客户端实际可用 Skill 列表分别包含三个名称，保留列表/注册表证据。
 3. 按业务语义分别实际调用三个 Skill，保留真实工具调用记录。
 4. 新开独立会话，重新验证发现和自动选择；不依赖旧聊天。
@@ -64,7 +64,7 @@ exchange/{inputs,outputs,intake,receipts,quarantine}/
 
 职责映射已写入 CODEBUDDY.md：邮件分析/分类/关联/英文草稿/To Do 对账调用 workthread-analysis；对话新增 To Do 调用 workthread-intake；个人习惯/客户要求/项目知识维护调用 workthread-knowledge。用户正常提问无需每次指定 Skill 名称。
 
-目录依据：优先采用用户提供的 WorkBuddy 5.9.3 Windows 验收目标 `.workbuddy/skills`。截至 2026-11-05，官方[项目文档](https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Project)仍列 `.codebuddy/skills` 兼容代码开发配置；该差异需在 G5 用实际客户端列表及调用记录判定。Mac 模板测试只证明部署正确。
+目录依据：用户提供的 Windows 10 19045 / WorkBuddy 5.9.3 真机结论：rc2 的 .workbuddy/skills 无法发现，原文复制到 .codebuddy/skills 后三个 Skill 可发现、可调用且多个新会话持续可用。rc3 采用此已实测路径；未经人工修复的 rc3 原始安装包仍须另行真机验收。
 
 ## 4. 合成业务与 AI 文件交换
 
@@ -96,8 +96,8 @@ exchange/{inputs,outputs,intake,receipts,quarantine}/
 
 可用普通 ZIP 工具查看；完整备份使用 SQLite Backup API、归档锁及 JSONL 一致性检查。manifest v2 包含 SHA-256、大小、文件数；恢复先检查 ZIP、路径、manifest、哈希和数据库。完整恢复保留原目录保护副本，失败按实际处理目录回滚。邮箱与正式 AI 计划恢复后禁用，epoch 更新，旧结果失效。
 
-优先恢复到新的空目录。`Restore.cmd` 明确要求新目标并先预览；网页恢复当前选中的空间会保留保护副本，仅在明确核对目标后操作。To Do 恢复遇不同内容同 ID 会整笔回滚。不要覆盖原备份或复制正在写入的 SQLite 文件。历史 todos.7z/full.7z 不删除、不转换、不猜密码；rc2 仅恢复新版普通 ZIP。
+优先恢复到新的空目录。`Restore.cmd` 明确要求新目标并先预览；网页恢复当前选中的空间会保留保护副本，仅在明确核对目标后操作。To Do 恢复遇不同内容同 ID 会整笔回滚。不要覆盖原备份或复制正在写入的 SQLite 文件。历史 todos.7z/full.7z 不删除、不转换、不猜密码；rc3 仅恢复新版普通 ZIP。
 
 ## 6. 阶段边界
 
-G1 只完成本地程序、合成测试及静态适配。G2 审核 Mac 独立构建与提交集合；G3 获批后才推送并构建 Windows；G4 获批后制作完整离线包；G5 由 Windows WorkBuddy 真机验收，分别证明规则加载、三个 Skills 发现/调用、新会话和真实入库回执。本轮不连接真实 IMAP、不创建正式定时任务、不读取旧版 Shelley 项目。
+R0 仅本地检查、路径/文档修复与测试；R1 明确批准后才能提交、推送和 Windows 构建；R2 明确批准后才能制作新 rc3 离线包。随后真机安装另行批准，必须验证未经人工复制目录的原始包、独立新会话和不透露 Skill 名称的自然语言自动选择。本轮不连接真实 IMAP、不创建正式任务、不读取旧项目，不改现有 rc2 Windows 空间。

@@ -1,16 +1,16 @@
-# WorkThread Windows 全新部署与验收提示词（rc2 草稿）
+# WorkThread Windows 全新部署与验收提示词（rc3 R0 待构建）
 
-提示词 ID：**WORKTHREAD-WINDOWS-DEPLOY-ACCEPT-002-G1-DRAFT**。
+提示词 ID：**WORKTHREAD-WINDOWS-DEPLOY-ACCEPT-003-R0-DRAFT**。
 
-状态：G1 形成、经 G2 文档审核的部署草稿；G3 完成后填写实际构建信息，G4 批准并传输后才可执行。没有 rc2 实际包、SHA-256 或阶段授权时停止，不沿用 rc1 哈希、Commit 或历史 Actions 链接。
+状态：rc3 R0 本地修订，尚无 rc3 Commit、Actions、程序 ZIP 或 SHA。须通过 R1/R2 及真机授权后执行，不沿用 rc2 交付身份。
 
 ## 给 Windows WorkBuddy 的任务
 
-只在本机得到 G5 合成验收授权后执行。目标：Windows 10 Professional 22H2、build 19045、x64，WorkBuddy 5.9.3，从 rc2 离线包全新安装，用合成数据验证程序、截止日期、普通 ZIP、项目规则、三个 Skills 与真实 AI 入库回执。逐项保留证据，失败如实记录；不更改应用源码或测试标准来制造 PASS。
+只在本机得到 G5 合成验收授权后执行。目标：Windows 10 Professional 22H2、build 19045、x64，WorkBuddy 5.9.3，从 rc3 离线包全新安装，用合成数据验证程序、截止日期、普通 ZIP、项目规则、三个 Skills 与真实 AI 入库回执。逐项保留证据，失败如实记录；不更改应用源码或测试标准来制造 PASS。
 
 ### 1. 范围与路径
 
-- 资料：`F:\WorkThread-Offline-Deploy-V2`，其中应包含 rc2 程序 ZIP、SHA-256、WINDOWS_BUILD_REPORT.md、WINDOWS_QUICK_START.md、WINDOWS_ACCEPTANCE.md、WORKBUDDY_SETUP.md、本提示词及 VERSION_INFO.md。
+- 资料：`F:\WorkThread-Offline-Deploy-V2`，其中应包含 rc3 程序 ZIP、SHA-256、WINDOWS_BUILD_REPORT.md、WINDOWS_QUICK_START.md、WINDOWS_ACCEPTANCE.md、WORKBUDDY_SETUP.md、本提示词及 VERSION_INFO.md。
 - 新程序：`F:\WorkThread`；正式数据：`F:\WorkThread\workspace`；正式 WorkBuddy 项目：`F:\WorkThread\workspace\agent-workspace`。
 - 合成数据：`F:\WorkThread\acceptance`；合成验收必须打开：`F:\WorkThread\acceptance\agent-workspace`。
 - 资料目录不是业务项目工作空间；不要把当前对话绑定在 `F:\WorkThread-Offline-Deploy-V2`。
@@ -21,9 +21,9 @@
 
 记录系统、架构、WorkBuddy 版本、时区、磁盘空间、8765/8766 端口。不要结束未知进程或绕过系统安全策略。
 
-读取实际 WINDOWS_BUILD_REPORT.md 和 VERSION_INFO.md，核对为获批 rc2。用 `Get-FileHash -Algorithm SHA256` 比较程序 ZIP 和校验文件；完整解压后按 UTF-8 SHA256SUMS.json 校验包内文件及 BUILD_INFO.json 的真实 Commit、Windows/AMD64。哈希不符停止，不改校验值。不索取聊天中的密码/Token，不擅自公开仓库。
+读取实际 WINDOWS_BUILD_REPORT.md 和 VERSION_INFO.md，核对为获批 rc3。用 `Get-FileHash -Algorithm SHA256` 比较程序 ZIP 和校验文件；完整解压后按 UTF-8 SHA256SUMS.json 校验包内文件及 BUILD_INFO.json 的真实 Commit、Windows/AMD64。哈希不符停止，不改校验值。不索取聊天中的密码/Token，不擅自公开仓库。
 
-在新目录运行 Install.cmd；或系统策略允许时 tools\install.ps1。每步检查退出码，不降低执行策略。两个空间均应自动创建：CODEBUDDY.md、.codebuddy/rules/workthread.md、.workbuddy/skills 下三个独立 Skills、三个 schemas 和 exchange 子目录。检查 .workthread-deployment.json 模板版本和冲突；冲突不能静默覆盖。
+在新目录运行 Install.cmd；或系统策略允许时 tools\install.ps1。每步检查退出码，不降低执行策略。两个空间均应自动创建：CODEBUDDY.md、.codebuddy/rules/workthread.md、.codebuddy/skills 下三个独立 Skills、三个 schemas 和 exchange 子目录。检查 .workthread-deployment.json 模板版本和冲突；冲突不能静默覆盖。
 
 运行 Health.cmd、Start.cmd，正式页面只检查空白状态；合成服务另用：
 
@@ -63,7 +63,7 @@ $WT_TEST = 'F:\WorkThread\acceptance'
 
 职责：邮件分析、分类、关联、英文草稿、To Do 对账调用 analysis；对话新增事项调用 intake；个人习惯、客户/项目知识调用 knowledge。不得合并三个 Skill。
 
-若客户端列表中缺失，明确报告 Skill 不可用并停止对应调用验收，记录版本、绑定路径、信任、启用状态与目录。可继续独立的程序/备份测试。不得改 app.asar、客户端缓存或用户级全局 Skills，不把 .codebuddy/skills 当作唯一方案，不将“读取 SKILL.md 并模仿”记为成功。
+若客户端列表中缺失，明确报告 Skill 不可用并停止对应调用验收，记录版本、绑定路径、信任、启用状态与目录。可继续独立的程序/备份测试。不得改 app.asar、客户端缓存或用户级全局 Skills，以 .codebuddy/skills 作为唯一正式分发目录，不将“读取 SKILL.md 并模仿”记为成功。
 
 ### 5. 真实 AI JSON 闭环
 
@@ -95,3 +95,6 @@ $WT_TEST = 'F:\WorkThread\acceptance'
 生成本机 G5 报告，逐项 PASS/FAIL/未测/BLOCKED，包括系统版本、实际路径、程序版本/真实 Commit/SHA、命令退出码、日期四组合、两类 ZIP 与新恢复位置、重启数据、两个空间隔离、规则加载证据、每个 Skill 的可用列表和真实调用证据、新会话、completed/saved/duplicate/superseded 回执。不要记录凭证或上传业务资料到 GitHub。
 
 区分“CI 构建成功”“Mac 模板存在”“Windows 客户端实际发现”“真实调用”“Python 入库”。失败时停止相应验收，不伪装通过。完成后停止，等待用户最终闸门；不自动接入真实 IMAP、不启用正式调度。
+
+
+rc3 必验：使用未经人工修复的原始 rc3 包在全新空间初始化；不得复制 Skills 才使验收通过。除三个已知名称的列表/工具证据外，另给一次不提前透露 Skill 名称的自然语言任务，验证自主路由，并在独立新会话重复。缺失时停止对应验收并报告，不用人工读取 SKILL.md 代替。

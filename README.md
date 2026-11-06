@@ -2,9 +2,9 @@
 
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；WorkBuddy 负责分析。网页无需模型 API，可独立维护 To Do 和进展日志。
 
-当前源码候选版本：**1.0.0rc2**，G1 已验收通过，G2 Mac 独立运行及发布前审核报告已生成，等待用户审核并批准 G3；尚未获得推送及 Windows 构建授权。rc1 的历史构建和真机测试不能替代 rc2 验收。报告见 `docs/GOAL002_MAC_ACCEPTANCE.md`、`docs/GOAL002_RELEASE_AUDIT.md`，G1 报告保留。
+当前源码候选版本：**1.0.0rc3**，本轮仅 R0 本地修复与测试；尚无 rc3 Windows Commit/Actions/安装包。已发布 rc2 为 8f4cea4d37b0ee9ecca0ec21c3d4394fbe45d5ea，历史产物和验收报告保留。根据用户提供的 Windows G5 实测，正式 Skill 分发改用 `.codebuddy/skills/`；rc3 原始包的客户端发现和调用仍须重新真机验收。
 
-Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。部署入口：[全新部署与真机验收提示词（G1 草稿）](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。只用合成数据，真实邮箱与正式计划保持禁用。
+Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。部署入口：[全新部署与真机验收提示词（rc3 R0）](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。只用合成数据，真实邮箱与正式计划保持禁用。
 
 ## Mac 开发与合成演示
 
@@ -37,11 +37,11 @@ Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3�
 
 ```sh
 .venv/bin/python -m pytest -q
-.venv/bin/python -m PyInstaller --noconfirm --workpath .runtime/goal002-g2/build --distpath .runtime/goal002-g2/dist packaging/workthread.spec
-.venv/bin/python scripts/smoke_frozen.py .runtime/goal002-g2/dist/WorkThread/WorkThread
+.venv/bin/python -m PyInstaller --noconfirm --workpath .runtime/rc3-r0/build --distpath .runtime/rc3-r0/dist packaging/workthread.spec
+.venv/bin/python scripts/smoke_frozen.py .runtime/rc3-r0/dist/WorkThread/WorkThread
 ```
 
-上方 Mac 构建命令使用独立输出目录，保留既有 rc1 产物；该命令已在获批 G2 中验证。最后一条是 Mac 原生包测试。Windows 在 `.github/workflows/windows.yml` 的 Windows runner 构建，不能把 Mac 包改后缀当作 Windows 包。完整步骤见 `docs/WINDOWS_ACCEPTANCE.md`。
+上方 Mac 构建命令使用独立输出目录，保留既有 rc1 产物；R0 仅使用独立临时输出做 Mac 资源核验，不代表 Windows 构建。最后一条是 Mac 原生包测试。Windows 在 `.github/workflows/windows.yml` 的 Windows runner 构建，不能把 Mac 包改后缀当作 Windows 包。完整步骤见 `docs/WINDOWS_ACCEPTANCE.md`。
 
 ## 数据与凭证
 

@@ -17,15 +17,17 @@ def test_two_fresh_spaces_deploy_independently_and_remain_empty(tmp_path):
     for space in ("workspace", "acceptance"):
         store = Store(tmp_path / space)
         first = install_templates(store)
-        assert first["ready"] and first["template_version"] == "1.0.0rc2"
+        assert first["ready"] and first["template_version"] == "1.0.0rc3"
         assert all(f["status"] == "installed" for f in first["files"])
         dest = store.root / "agent-workspace"
         for name in SKILLS:
-            skill = dest / ".workbuddy/skills" / name / "SKILL.md"
+            skill = dest / ".codebuddy/skills" / name / "SKILL.md"
             assert skill.is_file() and ("name: " + name) in skill.read_text(
                 encoding="utf-8"
             )
-        assert not (dest / ".codebuddy/skills").exists()
+        assert not (dest / ".workbuddy/skills").exists()
+        for path, expected in first["managed_files"].items():
+            assert hashlib.sha256((dest / path).read_bytes()).hexdigest() == expected
         for name in (
             "CODEBUDDY.md",
             ".codebuddy/rules/workthread.md",
@@ -47,6 +49,7 @@ def test_two_fresh_spaces_deploy_independently_and_remain_empty(tmp_path):
         assert second["ready"] and all(
             f["status"] == "current" for f in second["files"]
         )
+        assert second["managed_files"] == first["managed_files"]
     Store(tmp_path / "acceptance").create_todo(
         {"raw_input": "synthetic only", "no_due_date": True}
     )
@@ -61,7 +64,7 @@ def test_custom_rules_skills_and_schemas_never_silently_overwritten(tmp_path):
         "CODEBUDDY.md",
         ".codebuddy/rules/workthread.md",
         "schemas/intake.json",
-        ".workbuddy/skills/workthread-analysis/SKILL.md",
+        ".codebuddy/skills/workthread-analysis/SKILL.md",
     ]
     for name in paths:
         (dest / name).write_text("custom: " + name)
@@ -98,7 +101,7 @@ def test_known_rc1_templates_update_but_custom_legacy_files_stay(tmp_path):
     legacy.parent.mkdir(parents=True)
     legacy.write_text("custom rc1 skill; preserve")
     report = install_templates(store)
-    assert report["ready"]
+    assert not report["ready"]
     assert all(
         next(f for f in report["files"] if f["path"] == n)["status"] == "updated"
         for n in (
@@ -108,7 +111,7 @@ def test_known_rc1_templates_update_but_custom_legacy_files_stay(tmp_path):
         )
     )
     assert legacy.read_text(encoding="utf-8") == "custom rc1 skill; preserve"
-    assert (dest / ".workbuddy/skills/workthread-analysis/SKILL.md").exists()
+    assert {c["path"] for c in report["conflicts"]} == {".codebuddy/skills/workthread-analysis/SKILL.md"}
 
 
 def test_all_three_original_business_bodies_preserved():
@@ -119,7 +122,7 @@ def test_all_three_original_business_bodies_preserved():
             )
         )["preserved_skill_prefixes"][name]
         current = (
-            ROOT / "workbuddy_template/.workbuddy/skills" / name / "SKILL.md"
+            ROOT / "workbuddy_template/.codebuddy/skills" / name / "SKILL.md"
         ).read_bytes()
         assert (
             hashlib.sha256(current[: origin["bytes"]]).hexdigest() == origin["sha256"]

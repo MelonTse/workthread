@@ -40,4 +40,4 @@ rc2 使用标准 ZIP，不含应用层密码或加密，不依赖 py7zr。manife
 
 SQLite 在线备份与跨进程工作空间锁共同协调快照。备份暂存期间其他写入等待；大归档可能延长等待时间。普通 ZIP 压缩在一致性快照完成后进行，不执行应用层加密。恢复保留原目录作为回退。
 
-rc2 的新建与编辑截止日期在 core.validate_deadline 统一校验。历史空日期保持原状；新增业务写入不能保存 null/false。项目 Skills 位于 .workbuddy/skills，规则仍位于 CODEBUDDY.md 和 .codebuddy/rules；版本化初始化按哈希保护自定义文件并输出冲突候选，不推断客户端发现成功。
+rc2 的新建与编辑截止日期在 core.validate_deadline 统一校验。历史空日期保持原状；新增业务写入不能保存 null/false。项目 Skills 位于 .codebuddy/skills，规则仍位于 CODEBUDDY.md 和 .codebuddy/rules；版本化初始化按哈希保护自定义文件并输出冲突候选，不推断客户端发现成功。

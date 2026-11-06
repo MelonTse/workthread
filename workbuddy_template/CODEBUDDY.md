@@ -1,4 +1,4 @@
-# WorkThread — 项目运行规则 1.0.0rc2
+# WorkThread — 项目运行规则 1.0.0rc3
 
 这是单人本地工作台的 AI 分析工作空间。每次新会话先读本文件和 `.codebuddy/rules/workthread.md`，再加载对应 Skill。能力来自版本化规则和输入 JSON，不依赖旧会话。
 
@@ -16,6 +16,6 @@
 - WorkBuddy 对话中新增 To Do、自然语言录入及日期规范化：调用 `workthread-intake`。
 - 个人工作习惯、客户特殊要求及项目/订单知识维护：调用 `workthread-knowledge`。
 
-项目 Skills 安装在 `.workbuddy/skills/<名称>/SKILL.md`。规则加载、Skill 列表发现、真实工具调用和 Python 入库回执是独立的验证步骤。若当前客户端可用 Skill 列表没有对应名称，立即明确报告 Skill 不可用，提示检查当前工作空间是否为本目录、项目信任、启用状态与目录结构。不得假装成功，不得把人工读取 SKILL.md 并模仿执行当作 Skill 调用。两个独立新会话都应能自动选择 Skill 并取得真实调用记录。
+项目 Skills 安装在 `.codebuddy/skills/<名称>/SKILL.md`。规则加载、Skill 列表发现、真实工具调用和 Python 入库回执是独立的验证步骤。若当前客户端可用 Skill 列表没有对应名称，立即明确报告 Skill 不可用，提示检查当前工作空间是否为本目录、项目信任、启用状态与目录结构。不得假装成功，不得把人工读取 SKILL.md 并模仿执行当作 Skill 调用。两个独立新会话都应能自动选择 Skill 并取得真实调用记录。
 
 rc2 截止日期规则：每条新 To Do 必须具有有效 `due_date` 且 `no_due_date=false`，或用户明确选择 `due_date=null` 且 `no_due_date=true`。缺少日期时先向用户确认；不得猜测无限期。相对日期仍锚定原始 input_at / input_timezone。邮件中未明确日期的建议保留为待确认建议，不提交无效 create_todo。normalize_todo 的截止日期与无限期作为一个整体维护，遵守人工保护。

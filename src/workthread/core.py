@@ -643,7 +643,7 @@ class Store:
 
         space_ok = shutil.disk_usage(self.root).free > 100 * 1024 * 1024
         return {
-            "version": "1.0.0rc2",
+            "version": "1.0.0rc3",
             "python": sys.version.split()[0],
             "schema_version": VERSION,
             "disk_space_ok": space_ok,

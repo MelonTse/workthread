@@ -8,13 +8,15 @@ import importlib.metadata
 import os
 import platform
 from pathlib import Path
+from check_bundle import check_bundle
 
 root = Path(__file__).resolve().parents[1]
-output = root / "artifacts" / "WorkThread-1.0.0rc2-windows-x64"
+output = root / "artifacts" / "WorkThread-1.0.0rc3-windows-x64"
 if sys.platform != "win32":
     raise SystemExit(
         "Windows packaging must run on Windows; use native spec build only for Mac smoke tests"
     )
+check_bundle(root / "dist/WorkThread", root)
 if output.exists():
     shutil.rmtree(output)
 output.mkdir(parents=True)
@@ -56,7 +58,7 @@ for distribution in importlib.metadata.distributions():
     json.dumps({"python": sys.version, "packages": versions}, indent=2)
 )
 (output / "BUILD_INFO.json").write_text(json.dumps({
-    "version": "1.0.0rc2",
+    "version": "1.0.0rc3",
     "commit_sha": os.environ.get("GITHUB_SHA"),
     "runner_os": platform.system(),
     "machine": platform.machine(),

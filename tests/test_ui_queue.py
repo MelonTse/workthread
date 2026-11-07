@@ -47,7 +47,7 @@ def test_rewrite_includes_completed_mail_saved_draft_and_exact_feedback(tmp_path
         store.rows("SELECT state FROM ai_jobs WHERE job_id=?", (jid,))[0]["state"]
         == "pending"
     )
-    assert json.loads((bridge.exchange / "inputs" / f"{jid}.json").read_text()) == job
+    assert json.loads((bridge.exchange / "inputs" / f"{jid}.json").read_text(encoding="utf-8")) == job
     assert not (bridge.exchange / "results" / f"{jid}.json").exists()
 
 

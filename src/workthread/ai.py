@@ -26,40 +26,42 @@ def validate(obj, name):
     Draft202012Validator(schema).validate(obj)
 
 
+def status_allowed(c, original, status, refs):
+    protected = load(original["protected_fields"], [])
+    safe = status in ("open", "in_progress", "waiting") and "status" not in protected
+    if status == "done" and refs and "status" not in protected:
+        policy = load(original["completion_policy"], {})
+        if policy.get("type") == "reply_sent":
+            for e in refs:
+                mail = c.execute(
+                    "SELECT * FROM messages WHERE message_id=?",
+                    (e["message_id"],),
+                ).fetchone()
+                sent = c.execute(
+                    "SELECT 1 FROM mail_occurrences o JOIN mail_folders f ON o.folder_id=f.folder_id JOIN mail_accounts a ON o.account_id=a.account_id WHERE o.message_id=? AND f.direction='sent' AND lower(a.username) IN (SELECT lower(json_extract(value,'$.address')) FROM json_each(?))",
+                    (e["message_id"], mail["sender"]),
+                ).fetchone()
+                safe = bool(
+                    sent and mail["in_reply_to"] == policy.get("reply_to_message_id")
+                )
+                if safe:
+                    break
+    return safe
+
+
 class Bridge:
     def __init__(self, store):
         self.s = store
         self.exchange = store.root / "agent-workspace" / "exchange"
 
     def queue_draft_rewrite(self, draft_id):
-        """Queue one saved draft with its exact feedback; never invoke a model."""
-        with self.s.lock:
-            drafts = self.s.rows("SELECT * FROM drafts WHERE draft_id=?", (draft_id,))
-            if not drafts or not drafts[0]["message_id"]:
-                raise ValueError("草稿未关联原邮件，无法加入重写队列")
-            draft = drafts[0]
-            if not self.s.rows("SELECT message_id FROM messages WHERE message_id=?", (draft["message_id"],)):
-                raise ValueError("找不到草稿对应的原邮件")
-            feedback = self.s.rows(
-                "SELECT * FROM feedback WHERE target_id=? ORDER BY created_at, feedback_id",
-                (draft_id,),
-            )
-            rewrite = {
-                "draft_id": draft_id,
-                "message_id": draft["message_id"],
-                "revision": draft["revision"],
-                "subject": draft["subject"],
-                "body": draft["body"],
-                "feedback": feedback,
-                "instruction": "根据这份已保存草稿及其反馈生成新的回复草稿，使用 create_draft；不发送邮件，不修改 To Do。",
-            }
-            for pending in self.s.rows("SELECT job_id, input_json FROM ai_jobs WHERE state='pending'"):
-                if load(pending["input_json"])["context"].get("draft_rewrite") == rewrite:
-                    return {"queued": [{"job_id": pending["job_id"]}], "existing": True}
-            jobs = self.prepare(rewrite_draft=rewrite)
-            return {"queued": [{"job_id": job["job_id"]} for job in jobs], "existing": False}
+        from .draft_tasks import execute
+        rows = self.s.rows("SELECT message_id FROM drafts WHERE draft_id=?", (draft_id,))
+        if not rows or not rows[0]["message_id"]:
+            raise ValueError("草稿未关联原邮件")
+        return execute(self, rows[0]["message_id"], draft_id, {"mode": "workbuddy"})
 
-    def prepare(self, kind="reconcile", historical=False, *, rewrite_draft=None):
+    def prepare(self, kind="reconcile", historical=False):
         if kind not in ("reconcile", "normalize", "historical"):
             raise ValueError("unknown job type")
         active = self.s.rows(
@@ -68,7 +70,7 @@ class Bridge:
         mails = self.s.rows("SELECT * FROM messages ORDER BY internal_date DESC")
         analyzed = set()
         for completed in self.s.rows(
-            "SELECT input_json FROM ai_jobs WHERE state='completed'"
+            "SELECT input_json FROM ai_jobs WHERE state='completed' AND job_type NOT IN ('mail_draft','todo_assist','knowledge_assist')"
         ):
             previous = load(completed["input_json"])
             if previous["scope"]["historical"] == historical and not previous["context"].get("draft_rewrite"):
@@ -82,13 +84,6 @@ class Bridge:
             if not historical
             else [m for m in mails if (m["internal_date"] or "") < cutoff]
         )
-        if rewrite_draft is not None:
-            # Explicit rewrite requests include already analyzed / older mail too.
-            # They are separate from pending general jobs so new feedback is not lost.
-            active = []
-            mails = self.s.rows(
-                "SELECT * FROM messages WHERE message_id=?", (rewrite_draft["message_id"],)
-            )
         jobs = []
         # Every open task is covered in bounded pages; each page contains its evidence.
         for offset in range(0, max(len(active), len(mails), 1), 20):
@@ -149,8 +144,6 @@ class Bridge:
                 ),
                 "profile": self.s.setting("profile"),
             }
-            if rewrite_draft is not None:
-                context["draft_rewrite"] = rewrite_draft
             job = {
                 "schema_version": "1.0",
                 "workspace_id": self.s.setting("workspace_id"),
@@ -198,16 +191,18 @@ class Bridge:
             if not m or e["quote"] not in m["body_text"]:
                 raise ValueError("evidence quote not found")
 
-    def import_result(self, result):
+    def import_result(self, result, *, channel="workbuddy"):
         try:
-            receipt = self._import_result(result)
+            receipt = self._import_result(result, channel)
         except Conflict as error:
             if isinstance(result, dict) and isinstance(result.get("job_id"), str):
                 with self.s.db() as c:
-                    c.execute(
-                        "UPDATE ai_jobs SET state='superseded',error=?,updated_at=? WHERE job_id=? AND state!='completed'",
+                    changed = c.execute(
+                        "UPDATE ai_jobs SET state='superseded',error=?,updated_at=? WHERE job_id=? AND state IN ('pending','running')",
                         (str(error), now(), result["job_id"]),
                     )
+                if not changed.rowcount:
+                    raise
                 atomic_json(
                     self.exchange / "receipts" / (result["job_id"] + ".json"),
                     {
@@ -218,16 +213,32 @@ class Bridge:
                 )
             raise
         atomic_json(self.exchange / "receipts" / (receipt["job_id"] + ".json"), receipt)
+        if (receipt.get("draft_id") or "created" in receipt or "proposed" in receipt) and channel == "workbuddy":
+            (self.exchange / "inputs" / (receipt["job_id"] + ".json")).unlink(missing_ok=True)
         return receipt
 
-    def _import_result(self, result):
-        validate(result, "ai-output")
+    def _import_result(self, result, channel):
+        if not isinstance(result, dict) or not isinstance(result.get("job_id"), str):
+            raise ValueError("无效的任务编号")
         with self.s.db() as c:
             row = c.execute(
                 "SELECT * FROM ai_jobs WHERE job_id=?", (result["job_id"],)
             ).fetchone()
             if not row:
                 raise ValueError("unknown job")
+            job = load(row["input_json"])
+            if job["job_type"] == "knowledge_assist":
+                from .knowledge_tasks import apply_result
+                return apply_result(self.s, c, row, result, channel)
+            if job["job_type"] == "todo_assist":
+                from .todo_assist import apply_result
+                return apply_result(self.s,c,row,result,channel)
+            validate(result, "ai-output")
+            scoped = job["job_type"] == "mail_draft"
+            if scoped and job["context"]["execution"]["mode"] != channel:
+                raise ValueError("该结果不属于当前任务执行方")
+            if scoped and row["state"] not in ("pending", "running", "completed"):
+                raise ValueError("草稿任务已结束，不能导入迟到结果")
             if row["state"] == "completed":
                 if load(row["result_json"]) != result:
                     raise Conflict("completed job has a different result")
@@ -235,15 +246,18 @@ class Bridge:
                     "job_id": row["job_id"],
                     "state": "completed",
                     "duplicate": True,
+                    **({"draft_id": job["job_id"]} if scoped else {}),
                 }
-            job = load(row["input_json"])
+            if scoped:
+                from .draft_tasks import validate_operation
+                validate_operation(self.s, job, result)
             for k in ("workspace_id", "workspace_epoch", "input_sha256"):
                 expected = self.s.setting(k) if k != "input_sha256" else job[k]
                 if result[k] != expected or result[k] != job[k]:
                     raise Conflict("stale or foreign " + k)
             if set(result["reviewed_todo_ids"]) != set(job["scope"]["todo_ids"]):
                 raise ValueError("incomplete reconciliation coverage")
-            snapshots = {t["todo_id"]: t for t in job["context"]["todos"]}
+            snapshots = {t["todo_id"]: t for t in job["context"].get("todos", [])}
             for tid, t in snapshots.items():
                 current = c.execute(
                     "SELECT revision FROM todos WHERE todo_id=?", (tid,)
@@ -255,6 +269,8 @@ class Bridge:
                     "SELECT payload_hash FROM ai_operations WHERE operation_id=?",
                     (op["operation_id"],),
                 ).fetchone()
+                if seen and scoped:
+                    raise Conflict("草稿操作编号已被使用")
                 if seen:
                     if seen[0] != digest(op):
                         raise Conflict("operation ID collision")
@@ -346,30 +362,7 @@ class Bridge:
                 elif typ == "propose_status":
                     original = snapshots[tid]
                     status = p["status"]
-                    protected = load(original["protected_fields"], [])
-                    safe = (
-                        status in ("open", "in_progress", "waiting")
-                        and "status" not in protected
-                    )
-                    if status == "done" and refs and "status" not in protected:
-                        policy = load(original["completion_policy"], {})
-                        if policy.get("type") == "reply_sent":
-                            for e in refs:
-                                mail = c.execute(
-                                    "SELECT * FROM messages WHERE message_id=?",
-                                    (e["message_id"],),
-                                ).fetchone()
-                                sent = c.execute(
-                                    "SELECT 1 FROM mail_occurrences o JOIN mail_folders f ON o.folder_id=f.folder_id JOIN mail_accounts a ON o.account_id=a.account_id WHERE o.message_id=? AND f.direction='sent' AND lower(a.username) IN (SELECT lower(json_extract(value,'$.address')) FROM json_each(?))",
-                                    (e["message_id"], mail["sender"]),
-                                ).fetchone()
-                                safe = bool(
-                                    sent
-                                    and mail["in_reply_to"]
-                                    == policy.get("reply_to_message_id")
-                                )
-                                if safe:
-                                    break
+                    safe = status_allowed(c, original, status, refs)
                     if safe and refs:
                         current = c.execute(
                             "SELECT revision FROM todos WHERE todo_id=?", (tid,)
@@ -383,6 +376,12 @@ class Bridge:
                             reason=p["reason"],
                             evidence=refs,
                         )
+                        if status != original["status"] and not any(
+                            step["type"] == "append_progress" and step.get("todo_id") == tid
+                            and step.get("evidence") == refs for step in result["operations"]
+                        ):
+                            self.s._progress(c,tid,{"content":p["reason"],"evidence_refs":refs,
+                                "source_ref":refs[0]["message_id"]},"ai",op["operation_id"]+":progress")
                     else:
                         self.s._review(c, "status", {"todo_id": tid, **p}, refs)
                 elif typ in (
@@ -396,7 +395,7 @@ class Bridge:
                         c, typ, dict(p, **({"todo_id": tid} if tid else {})), refs
                     )
                 elif typ == "create_draft":
-                    d = uid()
+                    d = job["job_id"] if scoped else uid()
                     c.execute(
                         "INSERT INTO drafts VALUES (?,?,?,?,?,?,?,?)",
                         (
@@ -442,20 +441,27 @@ class Bridge:
                 job["job_id"],
                 {"operations": len(result["operations"])},
             )
-        receipt = {"job_id": job["job_id"], "state": "completed", "duplicate": False}
-        atomic_json(self.exchange / "receipts" / (job["job_id"] + ".json"), receipt)
-        return receipt
+        return {"job_id": job["job_id"], "state": "completed", "duplicate": False,
+                **({"draft_id": job["job_id"]} if scoped else {})}
 
     def consume(self):
         results = []
         for f in sorted((self.exchange / "outputs").glob("*.json")):
+            payload = None
             try:
                 if f.stat().st_size > 10_000_000:
                     raise ValueError("result exceeds 10 MB")
-                receipt = self.import_result(json.loads(f.read_text(encoding="utf-8")))
+                payload = json.loads(f.read_text(encoding="utf-8"))
+                receipt = self.import_result(payload)
                 f.unlink()
                 results.append(receipt)
             except Exception as e:
+                job_id = payload.get("job_id") if isinstance(payload, dict) else f.stem
+                if isinstance(job_id, str):
+                    with self.s.db() as c:
+                        c.execute("""UPDATE ai_jobs SET state='failed',error=?,updated_at=?
+                                     WHERE job_id=? AND job_type IN ('mail_draft','todo_assist','knowledge_assist') AND state='pending'""",
+                                  ("WorkBuddy 结果未通过校验，请重新加入队列", now(), job_id))
                 target = self.exchange / "quarantine" / (uid() + ".json")
                 os.replace(f, target)
                 atomic_json(
@@ -484,10 +490,26 @@ class Bridge:
             "SELECT * FROM ai_jobs WHERE state IN ('pending','running','failed')"
         ):
             job = load(row["input_json"])
+            if job["job_type"] in ("mail_draft","todo_assist","knowledge_assist"):
+                if job["context"]["execution"]["mode"] == "api":
+                    if row["state"] == "running":
+                        from .draft_tasks import recover_api_request
+                        if job["job_type"] == "knowledge_assist":
+                            lock_id = "knowledge-" + job["context"]["fingerprint"]
+                        elif job["job_type"] == "todo_assist":
+                            lock_id = "todo-assist"
+                        else:
+                            lock_id = job["context"]["target_message_id"]
+                        recover_api_request(self.s, job, lock_id)
+                    continue
+                if row["state"] != "pending":
+                    continue
             if job["workspace_epoch"] == self.s.setting("workspace_epoch"):
                 atomic_json(self.exchange / "inputs" / (row["job_id"] + ".json"), job)
 
     def resolve(self, rid, accept):
+        if not isinstance(accept, bool):
+            raise ValueError("请选择确认或忽略")
         with self.s.db() as c:
             r = c.execute(
                 "SELECT * FROM review_items WHERE review_id=? AND state='pending'",

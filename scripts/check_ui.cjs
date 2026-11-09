@@ -143,6 +143,7 @@ const check = (name, value) => {assert.ok(value, name);results.push(name);};
  const invalid=p.waitForResponse(r=>r.url().endsWith('/restore'));await p.locator('#restore-form button[type=submit]').click();
  check('corrupt ZIP rejected',(await invalid).status()===400);check('corrupt ZIP cannot reveal apply',!await p.locator('#apply-restore').isVisible());
  check('corrupt ZIP leaves records intact',JSON.stringify((await api('/snapshot')).todos.map(t=>[t.todo_id,t.title]))===JSON.stringify(beforeRestore));
+ await p.locator('#toast').waitFor({state:'hidden'});
  // Responsive, focus and invariant navigation geometry across all five pages.
  for(const width of [1920,1440,1024,800,390]){
   await p.setViewportSize({width,height:1000});

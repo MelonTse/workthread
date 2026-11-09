@@ -20,7 +20,10 @@
       "enum": [
         "reconcile",
         "normalize",
-        "historical"
+        "historical",
+        "mail_draft",
+        "todo_assist",
+        "knowledge_assist"
       ]
     },
     "rules_version": {
@@ -56,17 +59,7 @@
       "additionalProperties": false
     },
     "context": {
-      "type": "object",
-      "required": [
-        "messages",
-        "todos",
-        "progress_logs",
-        "human_decisions",
-        "customers",
-        "cases",
-        "knowledge",
-        "taxonomy"
-      ]
+      "type": "object"
     }
   },
   "required": [
@@ -83,5 +76,92 @@
     "context"
   ],
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "job_type": {
+            "const": "mail_draft"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "context": {
+            "type": "object",
+            "required": [
+              "target_message_id",
+              "messages",
+              "knowledge",
+              "execution",
+              "instructions",
+              "material_hash"
+            ]
+          }
+        }
+      },
+      "else": {
+        "if": {
+          "properties": {
+            "job_type": {
+              "const": "todo_assist"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "context": {
+              "type": "object",
+              "required": [
+                "sources",
+                "todos",
+                "instructions",
+                "execution"
+              ]
+            }
+          }
+        },
+        "else": {
+          "if": {
+            "properties": {
+              "job_type": {
+                "const": "knowledge_assist"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "context": {
+                "required": [
+                  "material",
+                  "subject_id",
+                  "fingerprint",
+                  "instructions",
+                  "execution"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "context": {
+                "type": "object",
+                "required": [
+                  "messages",
+                  "todos",
+                  "progress_logs",
+                  "human_decisions",
+                  "customers",
+                  "cases",
+                  "knowledge",
+                  "taxonomy"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

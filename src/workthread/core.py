@@ -378,6 +378,10 @@ class Store:
             "SELECT * FROM status_events WHERE todo_id=? ORDER BY recorded_at", (tid,)
         )
         t["sources"] = self.rows("SELECT * FROM todo_sources WHERE todo_id=?", (tid,))
+        t["merged_inputs"] = self.rows(
+            """WITH RECURSIVE children AS (SELECT todo_id,raw_input FROM todos WHERE merged_into_id=?
+               UNION SELECT t.todo_id,t.raw_input FROM todos t JOIN children c ON t.merged_into_id=c.todo_id)
+               SELECT * FROM children""", (tid,))
         return t
 
     def _edit(self, c, tid, p, revision, human=True, reason="edited", evidence=()):
@@ -517,7 +521,7 @@ class Store:
 
     def duplicates(self):
         todos = self.rows(
-            "SELECT todo_id,title,source_ref FROM todos WHERE merged_into_id IS NULL AND status NOT IN ('done','cancelled')"
+            "SELECT todo_id,title,source_ref,source_type,revision FROM todos WHERE merged_into_id IS NULL AND status NOT IN ('done','cancelled')"
         )
         return [
             {"left": a, "right": b, "score": round(score, 2)}
@@ -528,31 +532,34 @@ class Store:
         ]
 
     def merge(self, keep, other, versions):
+        with self.db() as c:
+            self._merge(c, keep, other, versions)
+        return self.todo(keep)
+
+    def _merge(self, c, keep, other, versions):
         if keep == other:
             raise ValueError("cannot merge itself")
-        with self.db() as c:
-            for tid in (keep, other):
-                row = c.execute(
-                    "SELECT revision,merged_into_id FROM todos WHERE todo_id=?", (tid,)
-                ).fetchone()
-                if not row or row["revision"] != versions[tid] or row["merged_into_id"]:
-                    raise Conflict("merge version conflict")
-            c.execute(
-                "UPDATE progress_logs SET todo_id=? WHERE todo_id=?", (keep, other)
-            )
-            c.execute(
-                "UPDATE todo_sources SET todo_id=? WHERE todo_id=?", (keep, other)
-            )
-            c.execute(
-                "UPDATE todos SET merged_into_id=?,revision=revision+1,updated_at=? WHERE todo_id=?",
-                (keep, now(), other),
-            )
-            c.execute(
-                "UPDATE todos SET revision=revision+1,updated_at=? WHERE todo_id=?",
-                (now(), keep),
-            )
-            self.audit(c, "todo_merged", keep, {"other": other})
-        return self.todo(keep)
+        for tid in (keep, other):
+            row = c.execute(
+                "SELECT revision,merged_into_id FROM todos WHERE todo_id=?", (tid,)
+            ).fetchone()
+            if not row or row["revision"] != versions[tid] or row["merged_into_id"]:
+                raise Conflict("merge version conflict")
+        c.execute(
+            "UPDATE progress_logs SET todo_id=? WHERE todo_id=?", (keep, other)
+        )
+        c.execute(
+            "UPDATE todo_sources SET todo_id=? WHERE todo_id=?", (keep, other)
+        )
+        c.execute(
+            "UPDATE todos SET merged_into_id=?,revision=revision+1,updated_at=? WHERE todo_id=?",
+            (keep, now(), other),
+        )
+        c.execute(
+            "UPDATE todos SET revision=revision+1,updated_at=? WHERE todo_id=?",
+            (now(), keep),
+        )
+        self.audit(c, "todo_merged", keep, {"other": other})
 
     def knowledge(self, p, kid=None, revision=None):
         if p["scope"] not in ("personal", "customer", "case"):

@@ -92,6 +92,7 @@ def install_templates(store):
             known = {
                 hashes.get(name),
                 metadata.get("previous_hashes", {}).get(name),
+                metadata.get("rc4_previous_hashes", {}).get(name),
                 metadata.get("rc2_previous_hashes", {}).get(name),
             } - {None}
             if actual is None or actual in known:

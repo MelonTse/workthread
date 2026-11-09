@@ -176,6 +176,7 @@ async function refresh() {
 function switchView(v) {
   closeDetail();
   view = v;
+  if (v === 'todos') todoLane.view = 'list';
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   selected = null;
   render()
@@ -246,22 +247,185 @@ const todoDetail = {
   correct: null
 };
 
+const todoLane = {view:'list', selected:null};
+const proposalNames = {todo_input:'自然语言录入',todo_duplicate:'可能重复',todo_candidate:'新事项',todo_change:'进展建议'};
+
+function todoProposal(r, active) {
+  const p = JSON.parse(r.payload);
+  const target = data.todos.find(t => t.todo_id === p.target);
+  const duplicate = r.kind === 'todo_duplicate', candidate = r.kind === 'todo_candidate' || duplicate;
+  const dateFields = !p.due && !p.indefinite ? `<div class="review-date"><label>截止日期<input type="date" name="due"></label><label><input type="checkbox" name="indefinite"> 明确无限期</label></div>` : '';
+  const create = '<button data-todo-choice="create">确认创建</button>';
+  const ignore = '<button class="text-link" data-todo-choice="dismiss">忽略</button>';
+  const source = p.source_kind === 'mail' ? `<button class="text-link" data-origin-mail="${E(p.source_id)}">查看原邮件 ↗</button>` : '';
+  let body;
+  if (r.kind === 'todo_input') {
+    const apiMode = data.draft_ai.mode === 'api';
+    body = `<h2>整理原始事项</h2><blockquote>${E(p.raw)}</blockquote>
+      <small>${E(date(p.input_at))} · ${E(p.timezone)}</small>
+      ${apiMode?`<p class="form-note">将向 ${E(data.draft_providers[data.draft_ai.provider])} 发送这条原文及未关闭待办的标题、描述和状态等信息。</p>`:''}
+      <footer><button class="primary" data-normalize="${E(r.review_id)}">${apiMode?'整理这条待办':'加入待办整理队列'}</button></footer>`;
+  } else if (duplicate && target) {
+    body = `<h2>核对重复事项</h2><p class="review-note">${E(p.note)}</p>
+      <fieldset class="merge-comparison"><legend>选择合并后保留的事项</legend>
+        <label><input type="radio" name="keep-${E(r.review_id)}" value="keep_existing" checked><span>已有事项</span>
+          <strong>${E(target.title)}</strong><small>${E(states[target.status])} · ${E(target.due_date||(target.no_due_date?'无限期':'待填写'))}</small></label>
+        <label><input type="radio" name="keep-${E(r.review_id)}" value="keep_incoming"><span>本次提取</span>
+          <strong>${E(p.title)}</strong><small>${E(p.due|| (p.indefinite?'无限期':'合并时沿用已有日期'))}</small></label></fieldset>
+      <div class="review-evidence"><blockquote>${E(p.raw)}</blockquote><div class="review-links">${source}<button class="text-link" data-target-todo="${E(target.todo_id)}">查看已有事项 ↗</button></div></div>
+      <footer><button class="primary" data-todo-choice="merge">确认合并</button>${ignore}</footer>
+      <details class="separate-action"><summary>保留为独立事项</summary>${dateFields}${create}</details>`;
+  } else {
+    body = `<h2>${E(p.title || target?.title || '核对建议')}</h2><p>${E(p.note)}${p.status?' → '+E(states[p.status]):''}</p>
+      <div class="review-evidence"><blockquote>${E(p.raw)}</blockquote>${source}</div>
+      ${target?`<button class="text-link" data-target-todo="${E(target.todo_id)}">查看已有事项 ↗</button>`:''}
+      ${candidate?dateFields:''}<footer><button class="primary" data-todo-choice="${candidate?'create':'accept'}">${candidate?'确认创建':'确认记录'}</button>${ignore}</footer>`;
+  }
+  return `<article class="review-sheet" data-review-sheet="${E(r.review_id)}" ${r.kind==='todo_input'?'':`data-proposal="${E(r.review_id)}"`} data-revision="${target?.revision||0}" ${active?'':'hidden'}>${body}</article>`;
+}
+
+function todoHistory() {
+  const labels = {pending:'等待 WorkBuddy',running:'API 处理中',superseded:'已过期',withdrawn:'已撤回',failed:'失败',completed:'已保存'};
+  return `<section class="job-ledger"><header><h2>运行记录</h2><button class="text-link" id="refresh-todo-jobs">刷新结果</button></header>${data.todo_ai_history.map(j=>{
+    const n=j.payload && JSON.parse(j.payload);
+    const summary=n?[['新增',n.created],['进展',n.progress],['待确认',n.review]].filter(([,v])=>v).map(([k,v])=>k+' '+v).join(' · ')||'无待办变化':'';
+    return `<div class="job-entry"><time>${E(date(j.created_at))}</time><strong>${E(labels[j.state]||j.state)}</strong><div>${E(j.error||summary)}
+      ${[...new Set(n?.todo_ids||[])].map(id=>`<button class="text-link" data-target-todo="${E(id)}">${E(data.todos.find(t=>t.todo_id===id)?.title||'查看事项')} ↗</button>`).join('')}
+      ${j.state==='pending'?`<button class="text-link" data-withdraw-todo="${E(j.job_id)}">撤回</button>`:''}</div></div>`;
+  }).join('')||'<div class="empty">暂无待办分析记录</div>'}</section>`;
+}
+
+function todoAssistPanel() {
+  const isApi=data.draft_ai.mode==='api';
+  const pending=data.review_items.filter(r=>r.state==='pending' && Object.hasOwn(proposalNames,r.kind));
+  if(!pending.some(r=>r.review_id===todoLane.selected)) todoLane.selected=pending[0]?.review_id;
+  const queue=pending.map(r=>{
+    const p=JSON.parse(r.payload);
+    return `<button data-pick-review="${E(r.review_id)}" aria-pressed="${r.review_id===todoLane.selected}"><small>${proposalNames[r.kind]}</small><strong>${E(p.title||p.raw||p.note)}</strong></button>`;
+  }).join('');
+  return `<div class="todo-workbar">${tabBar([['list','工作清单'],['review','待处理'+(pending.length?' · '+pending.length:'')],['history','运行记录']],todoLane.view,'todo-lane','待办工作区')}
+    <div class="todo-tools"><button id="todo-input-toggle" aria-haspopup="dialog">自然语言录入</button>
+    <button id="todo-mail-toggle" aria-haspopup="dialog">${isApi?'从新邮件更新待办':'邮件待办入队'}</button></div></div>
+    <dialog class="todo-compose" id="todo-raw-dialog" aria-labelledby="raw-heading"><header><h2 id="raw-heading">自然语言录入</h2><button type="button" class="icon-button" aria-label="关闭" data-compose-close>×</button></header>
+    <form id="todo-raw-form" class="stack"><label>原始事项<textarea required maxlength="100000" name="raw" placeholder="例如：明天联系供应商确认样品"></textarea></label><p class="compose-error" role="status"></p><footer><button class="primary">保存原文</button></footer></form></dialog>
+    <dialog class="todo-compose" id="todo-mail-range" aria-labelledby="mail-range-heading"><header><h2 id="mail-range-heading">选择待处理邮件</h2><button type="button" class="icon-button" aria-label="关闭" data-compose-close>×</button></header>
+    <label>邮件范围 <select id="todo-range"><option value="recent">近 90 天</option><option value="historical">历史邮件（逐项确认）</option></select></label>
+    <div id="todo-mail-preview"></div><p class="compose-error" role="status"></p><footer><small>${isApi?E(data.draft_providers[data.draft_ai.provider])+' · '+E(data.draft_ai.model):'WorkBuddy 队列'}</small><button class="primary" id="run-mail-todos" disabled>${isApi?'确认分析本批邮件':'确认加入 WorkBuddy 队列'}</button></footer></dialog>
+    <section data-lane-panel="review" ${todoLane.view!=='review'?'hidden':''}>${pending.length?`<div class="review-workspace ${pending.length===1?'single-review':''}">${pending.length>1?`<aside class="review-index" aria-label="待处理事项">${queue}</aside>`:''}<div class="review-main">${pending.map(r=>todoProposal(r,r.review_id===todoLane.selected)).join('')}</div></div>`:'<div class="empty">暂无待处理事项</div>'}</section>
+    <section data-lane-panel="history" ${todoLane.view!=='history'?'hidden':''}>${todoHistory()}</section>`;
+}
+
+function wireTodoAssist() {
+  const rawForm=$('#todo-raw-form'), raw=$('#todo-raw-dialog'), range=$('#todo-mail-range');
+  bindTabs('[data-todo-lane]', key => {
+    todoLane.view=key;
+    markTabs('[data-todo-lane]', key);
+    document.querySelectorAll('[data-lane-panel]').forEach(panel => {panel.hidden=panel.dataset.lanePanel!==key});
+  });
+  document.querySelectorAll('[data-pick-review]').forEach(button => button.onclick=()=>{
+    todoLane.selected=button.dataset.pickReview;
+    document.querySelectorAll('[data-pick-review]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));
+    document.querySelectorAll('[data-review-sheet]').forEach(sheet=>{sheet.hidden=sheet.dataset.reviewSheet!==todoLane.selected});
+  });
+  document.querySelectorAll('[data-compose-close]').forEach(button=>button.onclick=()=>button.closest('dialog').close());
+  const inDialog=(dialog,fn)=>async e=>{
+    const error=dialog.querySelector('[role=status]');
+    error.textContent='';
+    try {await fn(e)} catch(err){error.textContent=err.message}
+  };
+  $('#todo-input-toggle').onclick=()=>{raw.showModal();rawForm.elements.raw.focus()};
+  let token=crypto.randomUUID(), mails=[], request=0;
+  rawForm.onsubmit=inDialog(raw,async e=>{
+    e.preventDefault();
+    const button=rawForm.querySelector('button');
+    button.disabled=true;
+    try {
+      const result=await api('/todo-ai/inputs','POST',{raw:rawForm.elements.raw.value,token});
+      todoLane.selected=result.input_id;
+      todoLane.view='review';
+      raw.close();
+      await refresh();
+      document.querySelector('[data-review-sheet]:not([hidden]) [data-normalize]')?.focus();
+    }
+    finally {button.disabled=false}
+  });
+  rawForm.oninput=()=>{token=crypto.randomUUID()};
+  const run=async (button,args)=>{
+    button.disabled=true;
+    try {
+      const r=await api('/todo-ai/run','POST',{...args,selection:data.draft_ai});
+      todoLane.view=r.state==='pending'?'history':r.review?'review':'list';
+      if(range.open) range.close();
+      toast(r.state==='pending'?'已入队，等待 WorkBuddy':'待办分析已保存');
+      await refresh();
+    } finally {button.disabled=false}
+  };
+  const loadRange=async()=>{
+    const id=++request;
+    const button=$('#run-mail-todos'), preview=$('#todo-mail-preview');
+    mails=[];button.disabled=true;
+    const scope=await api('/todo-ai/scope?historical='+($('#todo-range').value==='historical'?'1':'0'));
+    if(id!==request)return;
+    mails=scope.mails;
+    preview.innerHTML=`<p>待处理 ${scope.count} 封 · 本批 ${mails.length} 封</p>${mails.map(m=>`<label class="todo-mail-option"><input type="checkbox" data-scope-mail="${E(m.message_id)}" checked> ${E(m.subject)}</label>`).join('')}
+      ${mails.length && data.draft_ai.mode==='api'?'<p class="form-note">将发送本批邮件正文及未关闭待办的标题、描述、状态和截止日期。</p>':''}`;
+    preview.onchange=()=>{button.disabled=!preview.querySelector("[data-scope-mail]:checked")};
+    button.disabled=!mails.length;
+  };
+  $('#todo-mail-toggle').onclick=inDialog(range,async()=>{range.showModal();await loadRange()});
+  $('#todo-range').onchange=inDialog(range,loadRange);
+  $('#run-mail-todos').onclick=inDialog(range,e=>run(e.currentTarget,{mail_ids:[...range.querySelectorAll("[data-scope-mail]:checked")].map(b=>b.dataset.scopeMail),historical:$('#todo-range').value==='historical'}));
+  document.querySelectorAll('[data-normalize]').forEach(b=>b.onclick=attempt(()=>run(b,{input_id:b.dataset.normalize})));
+  document.querySelectorAll('[data-target-todo]').forEach(b=>b.onclick=attempt(()=>openTodo(b.dataset.targetTodo)));
+  document.querySelectorAll('[data-origin-mail]').forEach(b=>b.onclick=attempt(()=>openMail(b.dataset.originMail)));
+  document.querySelectorAll('[data-todo-choice]').forEach(b=>b.onclick=attempt(async()=>{
+    const row=b.closest('[data-proposal]');
+    const action=b.dataset.todoChoice==='merge'?row.querySelector('input[type=radio]:checked').value:b.dataset.todoChoice;
+    b.disabled=true;
+    try {
+      await api('/todo-ai/reviews/'+row.dataset.proposal,'POST',{action,revision:Number(row.dataset.revision),
+        due_date:row.querySelector('[name=due]')?.value||null,no_due_date:!!row.querySelector('[name=indefinite]')?.checked});
+      if(document.querySelectorAll('[data-review-sheet]').length===1) todoLane.view='list';
+      await refresh();
+    } finally {b.disabled=false}
+  }));
+  document.querySelectorAll('[data-withdraw-todo]').forEach(b=>b.onclick=attempt(async()=>{
+    await api('/todo-ai/withdraw/'+b.dataset.withdrawTodo,'POST',{});await refresh()
+  }));
+  if ($('#refresh-todo-jobs')) $('#refresh-todo-jobs').onclick=attempt(refresh);
+}
+
+function taskLedgerRows(todos) {
+  const sources={html:'手工录入',mail_ai:'邮件分析',workbuddy:'WorkBuddy'};
+  return todos.map(t=>`<div class="todo-row ${$('#detail-dialog').open && todoDetail.id===t.todo_id?'selected':''}" tabindex="0" role="button" data-todo="${E(t.todo_id)}">
+    <div class="todo-text"><div class="todo-title">${E(t.title)}</div><div class="todo-meta">${badge(t.priority,priorities[t.priority])}<span>${E(sources[t.source_type]||'')}</span></div></div>
+    <span class="task-date ${!t.due_date&&!t.no_due_date?'deadline-missing':''}">${E(t.no_due_date?'无限期':t.due_date||'待填写截止日期')}</span>
+    ${badge(t.status)}</div>`).join('') || '<div class="empty">暂无符合条件的事项</div>';
+}
+
 function todoView() {
   const todos = scopedTodos(todoState.scope);
   $('#workspace-content').innerHTML =
     `
-    <div class="toolbar">${searchField('todo-search','搜索 To Do','搜索事项、客户或描述…',todoState.query)}<button id="clear-todo-search" ${todoState.query?'':'disabled'}>清空搜索</button><button id="find-duplicates">查重</button></div>
-    ${todoState.scope!=='all'?`<div class="scope-bar"><span>工作清单 · ${scopeNames[todoState.scope]}</span><button id="clear-todo-scope" class="text-link">显示全部事项</button></div>`:''}
-    ${tabBar([['','全部'],...Object.entries(states)],todoState.status,'todo-status','To Do 状态')}
-    ${card('事项清单',`<div id="todo-list"></div>`,`<small id="todo-count"></small>`)}<div id="duplicate-list"></div>`;
+    ${todoAssistPanel()}
+    <section class="task-ledger" data-lane-panel="list" ${todoLane.view!=='list'?'hidden':''}>
+      <div class="ledger-tools">${searchField('todo-search','搜索 To Do','搜索事项、客户或描述…',todoState.query)}
+        <button class="text-link" id="clear-todo-search" hidden>清空搜索</button>
+        <select id="todo-status-filter" aria-label="按状态筛选"><option value="">全部状态</option>${Object.entries(states).map(([k,v])=>`<option value="${k}" ${todoState.status===k?'selected':''}>${v}</option>`).join('')}</select>
+        <button id="find-duplicates">查重</button><small id="todo-count"></small></div>
+      ${todoState.scope!=='all'?`<div class="scope-bar"><span>工作清单 · ${scopeNames[todoState.scope]}</span><button id="clear-todo-scope" class="text-link">显示全部事项</button></div>`:''}
+      <div class="ledger-columns" aria-hidden="true"><span>事项</span><span>截止日期</span><span>状态</span></div>
+      <div id="todo-list"></div><div id="duplicate-list"></div>
+    </section>`;
+  wireTodoAssist();
   const filter = () => {
     const visible = todos.filter(t => (!todoState.status || t.status === todoState.status) && (t.title +
         ' ' + t.description + ' ' + (data.customers.find(c => c.customer_id === t.customer_id)?.name ||
           '') + ' ' + (data.cases.find(c => c.case_id === t.case_id)?.title || '')).toLowerCase()
       .includes(todoState.query.toLowerCase()));
-    $('#todo-list').innerHTML = todoRows(visible);
-    $('#todo-count').textContent = `${visible.length} / ${todos.length} 项`;
-    $('#clear-todo-search').disabled = !todoState.query;
+    $('#todo-list').innerHTML = taskLedgerRows(visible);
+    $('#todo-count').textContent = visible.length===todos.length ? `${visible.length} 项` : `${visible.length} / ${todos.length} 项`;
+    $('#clear-todo-search').hidden = !todoState.query;
     wireTodos();
   };
   if ($('#clear-todo-scope')) $('#clear-todo-scope').onclick = () => {
@@ -279,30 +443,25 @@ function todoView() {
     filter();
     $('#todo-search').focus()
   };
-  bindTabs('[data-todo-status]', key => {
-    todoState.status = key;
-    markTabs('[data-todo-status]', key);
-    filter()
-  });
+  $('#todo-status-filter').onchange=e=>{
+    todoState.status=e.target.value;
+    filter();
+  };
   filter();
   $('#find-duplicates').onclick = attempt(async () => {
     const pairs = await api('/duplicates');
     $('#duplicate-list').innerHTML = card('可能重复', pairs.map((p, i) =>
-      `<div class="compact-row"><span>${E(p.left.title)} ↔ ${E(p.right.title)}</span><button data-merge="${i}">合并</button></div>`
+      `<div class="todo-proposal"><strong>${E(p.left.title)} ↔ ${E(p.right.title)}</strong>
+       <p>${E(p.left.source_ref)} · ${E(p.right.source_ref)}</p>
+       <button data-merge="${i}" data-keep="left">保留「${E(p.left.title)}」</button>
+       <button data-merge="${i}" data-keep="right">保留「${E(p.right.title)}」</button></div>`
     ).join('') || '<div class="empty">暂无重复建议</div>');
     document.querySelectorAll('[data-merge]').forEach(button => button.onclick = attempt(async () => {
       const pair = pairs[+button.dataset.merge];
-      if (!confirm('合并并保留全部来源、日志？')) return;
-      const a = await api('/todos/' + pair.left.todo_id),
-        b = await api('/todos/' + pair.right.todo_id);
-      await api('/merge', 'POST', {
-        keep: a.todo_id,
-        other: b.todo_id,
-        versions: {
-          [a.todo_id]: a.revision,
-          [b.todo_id]: b.revision
-        }
-      });
+      const keep = pair[button.dataset.keep], other = keep === pair.left ? pair.right : pair.left;
+      if (!confirm('确认合并至「' + keep.title + '」并保留双方来源和进展？')) return;
+      await api('/merge', 'POST', {keep:keep.todo_id,other:other.todo_id,
+        versions:{[keep.todo_id]:keep.revision,[other.todo_id]:other.revision}});
       toast('已合并');
       await refresh();
     }));
@@ -420,10 +579,10 @@ async function openTodo(id = null, keepTab = false) {
     `<div class="todo-heading"><label class="todo-title-field" for="todo-title">标题<input id="todo-title" name="title" form="edit-todo" value="${E(edit.title)}" placeholder="填写工作事项" required maxlength="100000" ${todoDetail.tab==='details'?'':'readonly'}></label></div>
     ${isNew?'':tabBar([['details','详情'],['progress',`进展 ${t.logs.length}`],['source','来源与历史']],todoDetail.tab,'todo-detail-tab','To Do 详情')}
     <section data-todo-detail-panel="progress" ${todoDetail.tab==='progress'?'':'hidden'}>
+      <div class="timeline">${[...t.logs].reverse().map(log=>`<div class="timeline-item"><small>${E(date(log.occurred_at))} · ${E(log.source_type)}${log.corrects_log_id?' · 更正':''}</small><p>${E(log.content)}</p>${JSON.parse(log.evidence_refs||"[]").map(ref=>`<blockquote>${E(ref.quote)} <button class="text-link" data-log-mail="${E(ref.message_id)}">原邮件</button></blockquote>`).join("")}<div class="log-footer"><small>写入 ${E(date(log.recorded_at))}</small><button class="text-link" data-correct="${E(log.log_id)}">更正</button></div></div>`).join('')||'<p class="muted">暂无进展</p>'}</div>
       <form id="progress-form" class="stack compact-form"><textarea id="progress-content" aria-label="进展内容" placeholder="记录进展…" required>${E(todoDetail.progress)}</textarea>
         <div class="inline-form"><label>发生时间 · ${E(data.timezone)}<input id="occurred-at" type="datetime-local" value="${E(todoDetail.occurredAt)}"></label><button class="primary" type="submit">追加进展</button><button type="button" id="cancel-correction" ${todoDetail.correct?'':'hidden'}>取消更正</button></div>
       </form>
-      <div class="timeline">${[...t.logs].reverse().map(log=>`<div class="timeline-item"><small>${E(date(log.occurred_at))} · ${E(log.source_type)}${log.corrects_log_id?' · 更正':''}</small><p>${E(log.content)}</p><div class="log-footer"><small>写入 ${E(date(log.recorded_at))}</small><button class="text-link" data-correct="${E(log.log_id)}">更正</button></div></div>`).join('')||'<p class="muted">暂无进展</p>'}</div>
     </section>
     <section data-todo-detail-panel="details" ${todoDetail.tab==='details'?'':'hidden'}>
       <form id="edit-todo" class="form-grid compact-form">
@@ -442,12 +601,13 @@ async function openTodo(id = null, keepTab = false) {
         <div class="wide todo-form-actions"><button id="save-todo" type="submit" class="primary">保存</button></div>
       </form>
     </section>
-    <section data-todo-detail-panel="source" ${todoDetail.tab==='source'?'':'hidden'}><div class="mini-heading">原始录入 · ${E(date(t.input_at))} · ${E(t.input_timezone)}</div><div class="detail-raw">${E(t.raw_input)}</div><div class="small prewrap section-space">${E(t.sources.map(s=>s.source_type+' · '+s.source_ref).join('\n'))}</div><div class="timeline">${[...t.status_events].reverse().map(event=>`<div class="timeline-item"><small>${E(date(event.recorded_at))} · ${E(event.source)}</small><p>${E(states[event.old_status]||'新建')} → ${E(states[event.new_status])}</p></div>`).join('')}</div></section>`;
+    <section data-todo-detail-panel="source" ${todoDetail.tab==='source'?'':'hidden'}><div class="mini-heading">原始录入 · ${E(date(t.input_at))} · ${E(t.input_timezone)}</div><div class="detail-raw">${E(t.raw_input)}</div>${(t.merged_inputs||[]).map(m=>`<div class="mini-heading">合并保留的原文</div><div class="detail-raw">${E(m.raw_input)}</div>`).join("")}<div class="small prewrap section-space">${E(t.sources.map(s=>s.source_type+' · '+s.source_ref).join('\n'))}</div><div class="timeline">${[...t.status_events].reverse().map(event=>`<div class="timeline-item"><small>${E(date(event.recorded_at))} · ${E(event.source)}</small><p>${E(states[event.old_status]||'新建')} → ${E(states[event.new_status])}</p></div>`).join('')}</div></section>`;
   if ($('#detail-dialog').matches(':modal')) $('#detail-dialog').close();
   if (!$('#detail-dialog').open) $('#detail-dialog').show();
   document.body.classList.add('todo-open');
   document.querySelectorAll('[data-todo]').forEach(el => el.classList.toggle('selected', el.dataset.todo ===
     id));
+  document.querySelectorAll('[data-log-mail]').forEach(b=>b.onclick=attempt(()=>openMail(b.dataset.logMail)));
   if (isNew) $('#todo-title').focus();
   bindTabs('[data-todo-detail-tab]', key => {
     todoDetail.tab = key;
@@ -649,7 +809,7 @@ function mailView() {
   const unlinked = data.drafts.filter(d => !d.message_id || !data.messages.some(m => m.message_id === d
     .message_id));
   // A draft whose mail is outside the snapshot is not guessed to belong to another message.
-  const reviews = data.review_items.filter(r => r.state === 'pending');
+  const reviews = data.review_items.filter(r => r.state === 'pending' && !r.kind.startsWith('todo_') && !JSON.parse(r.payload).knowledge_job_id);
   $('#workspace-content').innerHTML = `
     <div class="mail-workspace">
       <article class="card mail-index">
@@ -743,6 +903,10 @@ function renderMailDetail() {
   if (!detail) return;
   const m = detail.message;
   const draft = detail.drafts.find(d => d.draft_id === mailState.draftId);
+  const apiMode = data.draft_ai.mode === 'api';
+  const providerName = data.draft_providers[data.draft_ai.provider];
+  const job = detail.draft_jobs[0];
+  const jobStates = {pending:'等待 WorkBuddy 处理',running:'API 请求处理中',failed:'生成失败',superseded:'原文或草稿已更改',withdrawn:'任务已撤回',completed:'草稿已保存'};
   const feedback = detail.feedback.filter(f => f.target_id === draft?.draft_id);
   const edited = mailState.edits[draft?.draft_id] ?? draft;
   const sourceScroll = document.querySelector('.source-mail')?.scrollTop ?? 0;
@@ -769,16 +933,52 @@ function renderMailDetail() {
               <textarea name="body" aria-label="英文草稿" class="draft-body" required>${E(edited.body)}</textarea>
             </label>
           </form>
-          <div class="reply-actions"><button type="submit" form="mail-draft-form" class="primary" id="save-mail-draft">保存草稿</button><button type="button" id="queue-rewrite">加入 AI 重写队列</button><button type="button" id="copy-mail-draft">复制正文</button></div><p class="form-note">草稿不会自动发送</p>
+          <div class="reply-actions"><button type="submit" form="mail-draft-form" class="primary" id="save-mail-draft">保存草稿</button><button type="button" id="queue-rewrite">${apiMode?"按反馈重写":"加入 AI 重写队列"}</button><button type="button" id="copy-mail-draft">复制正文</button></div><p class="form-note">草稿不会自动发送</p>
           <details class="draft-feedback" data-feedback-for="${E(draft.draft_id)}" ${mailState.feedbackEdits[draft.draft_id] ? 'open' : ''}>
             <summary>给这份草稿提供反馈${feedback.length ? ` · ${feedback.length}` : ''}</summary>
             ${feedback.length ? `<div class="feedback-history">${feedback.map(f => `<div class="feedback-entry"><small>${E(date(f.created_at))}</small><div class="prewrap">${E(f.content)}</div></div>`).join('')}</div>` : ''}
             <form id="draft-feedback-form" class="stack"><label>修改意见<textarea name="content" aria-label="这份草稿的反馈" placeholder="例如：语气再简洁一些，补充交期说明。" required>${E(mailState.feedbackEdits[draft.draft_id] || '')}</textarea></label><button type="submit">保存这份草稿的反馈</button></form>
-          </details>` : `<div class="empty">暂无对应草稿</div>`}
+          </details>` : `<div class="empty">暂无对应草稿</div><button type="button" class="primary" id="generate-mail-draft">${apiMode?"生成回复草稿":"加入草稿生成队列"}</button>`}
+        <div class="draft-job-info"><small>${apiMode ? E(providerName)+' · '+E(data.draft_ai.model) : 'WorkBuddy 队列'}</small>
+          <span role="status" id="draft-run-status">${E(job ? (job.error || jobStates[job.state] || job.state) : '')}</span>
+          ${job && ['pending','running'].includes(job.state)?'<button class="text-link" id="refresh-draft-job">刷新结果</button>':''}
+          ${detail.draft_jobs.filter(j=>j.state==='pending').map(j=>`<button class="text-link" data-withdraw-job="${E(j.job_id)}">撤回排队任务</button>`).join('')}</div>
       </section>
     </article>`;
   document.querySelector('.source-mail').scrollTop = sourceScroll;
   $('#mail-thread').onclick = attempt(() => openMail(m.message_id));
+  const runDraft = attempt(async e => {
+    const button = e.currentTarget;
+    if (draft && (mailState.edits[draft.draft_id] || mailState.feedbackEdits[draft.draft_id]?.trim())) {
+      toast(apiMode ? '请先保存草稿及修改意见，再按反馈重写' : '请先保存草稿及修改意见，再加入 AI 重写队列');
+      return;
+    }
+    button.disabled = true;
+    const status = $('#draft-run-status');
+    status.textContent = apiMode ? '正在请求 ' + providerName + '…' : '正在加入队列…';
+    try {
+      const result = draft && !apiMode ?
+        await api('/drafts/' + draft.draft_id + '/queue','POST',{}) :
+        await api('/mail/' + m.message_id + '/draft','POST',{draft_id:draft?.draft_id, selection:data.draft_ai});
+      if (view === 'mail' && mailState.messageId === m.message_id) {
+        if (result.state === 'completed') mailState.draftId = result.draft_id;
+        await selectMail(m.message_id);
+        toast(result.queued ? '已加入队列，等待 WorkBuddy 处理' : '草稿已保存');
+      }
+    } catch (error) {
+      status.textContent = error.message;
+      toast(error.message);
+    } finally { button.disabled = false; }
+  });
+  const draftButton = $('#queue-rewrite') || $('#generate-mail-draft');
+  draftButton.onclick = runDraft;
+  const refreshDraft = $('#refresh-draft-job');
+  if (refreshDraft) refreshDraft.onclick = attempt(() => {mailState.draftId = null; return selectMail(m.message_id);});
+  document.querySelectorAll('[data-withdraw-job]').forEach(button => button.onclick = attempt(async () => {
+    await api('/draft-jobs/' + button.dataset.withdrawJob + '/withdraw','POST',{});
+    if (view === 'mail' && mailState.messageId === m.message_id) await selectMail(m.message_id);
+  }));
+
   if (!draft) return;
   document.querySelectorAll('[data-draft-tab]').forEach(button => {
     const activate = id => {
@@ -833,20 +1033,6 @@ function renderMailDetail() {
       button.disabled = false;
     }
   });
-  $('#queue-rewrite').onclick = attempt(async e => {
-    const button = e.currentTarget;
-    if (mailState.edits[draft.draft_id] || mailState.feedbackEdits[draft.draft_id]?.trim()) {
-      toast('请先保存草稿及修改意见，再加入 AI 重写队列');
-      return;
-    }
-    button.disabled = true;
-    try {
-      const result = await api('/drafts/' + draft.draft_id + '/queue', 'POST', {});
-      toast(result.existing ? '这份草稿已在队列中，等待 WorkBuddy 处理' : '已加入 AI 重写队列，等待 WorkBuddy 处理');
-    } finally {
-      button.disabled = false;
-    }
-  });
   $('#copy-mail-draft').onclick = attempt(async () => {
     await navigator.clipboard.writeText($('#mail-draft-form').elements.body.value);
     toast('这份草稿正文已复制');
@@ -895,6 +1081,56 @@ const knowledgeState = {
   query: ''
 };
 
+function knowledgeReviewPanel(scope, subject) {
+  const pending = data.review_items.filter(r=>r.kind==='propose_knowledge' && r.state==='pending')
+    .map(r=>({...r, proposal:JSON.parse(r.payload)}))
+    .filter(r=>r.proposal.scope===scope && (r.proposal.subject_id||null)===subject);
+  const jobs = data.knowledge_jobs.filter(j=>j.scope===scope && j.subject_id===subject);
+  if (!pending.length && !jobs.length) return '';
+  return card('待确认与整理记录', pending.map(r=>{
+    const quotes=JSON.parse(r.evidence_refs).map(e=>e.quote).filter(Boolean);
+    return `<section class="knowledge-proposal"><p>${E(r.proposal.content)}</p>
+      ${quotes.length?`<blockquote>原文 · ${E(quotes.join(' / '))}</blockquote>`:''}
+      <div class="button-row"><button class="primary" data-knowledge-review="${E(r.review_id)}" data-accept="true">确认入库</button>
+      <button class="text-link" data-knowledge-review="${E(r.review_id)}" data-accept="false">忽略</button></div></section>`;
+  }).join('') + jobs.map(j=>`<div class="knowledge-job"><strong>${E(({pending:'等待 WorkBuddy',running:'模型整理中',completed:'未提取到适用知识',failed:'整理失败'})[j.state])}</strong>
+    <span>${E(j.raw.slice(0,90))}</span>${j.error?`<small>${E(j.error)}</small>`:''}
+    ${j.state==='pending'?`<button class="text-link" data-knowledge-withdraw="${E(j.job_id)}">撤回</button>`:''}
+    ${j.state==='failed'?`<button class="text-link" data-knowledge-retry="${E(j.job_id)}">检查原文并重试</button>`:''}</div>`).join(''),
+    '<button class="text-link" id="knowledge-refresh">刷新结果</button>');
+}
+
+function openKnowledgeInput(scope, subject, name, original='') {
+  closeDetail();
+  const cfg=data.draft_ai, direct=cfg.mode==='api';
+  $('#detail-dialog').className='editor-dialog';
+  $('#dialog-label').textContent='整理原文';
+  $('#detail-content').innerHTML=`<form id="knowledge-input-form" class="stack compact-form">
+    <h2>${E(name)}</h2><label>原文<textarea required maxlength="20000" rows="7" name="raw" placeholder="粘贴客户要求、沟通笔记或工作习惯">${E(original)}</textarea></label>
+    <p class="form-note">${direct?`将向 ${E(data.draft_providers[cfg.provider])} 发送此对象名称、范围和原文。`:'由 WorkBuddy 整理，结果将在此页等待确认。'}</p>
+    <div class="button-row"><button class="primary" type="submit">${direct?'用模型整理':'加入 WorkBuddy 整理队列'}</button></div>
+    <span role="status" class="form-note"></span></form>`;
+  const form=$('#knowledge-input-form');
+  $('#detail-dialog').showModal();
+  form.elements.raw.focus();
+  form.onsubmit=async event=>{
+    event.preventDefault();
+    const button=form.querySelector('button'), status=form.querySelector('[role=status]');
+    button.disabled=true;
+    status.textContent=direct?'模型正在整理…':'正在加入队列…';
+    try {
+      const result=await api('/knowledge-ai/run','POST',{scope,subject_id:subject,raw:form.elements.raw.value,selection:cfg});
+      if(form.isConnected && $('#detail-dialog').open) $('#detail-dialog').close();
+      await refresh();
+      toast(result.existing?'相同原文已有整理记录':result.state==='pending'?'已加入 WorkBuddy 队列':result.proposed?'整理完成，请核对建议':'原文中未提取到适用知识');
+    } catch(error) {
+      status.textContent=error.message;
+      button.disabled=false;
+    }
+  };
+}
+
+
 function knowledgeView() {
   const scope = knowledgeState.scope,
     q = knowledgeState.query.toLowerCase();
@@ -925,9 +1161,26 @@ function knowledgeView() {
     `${tabBar([['personal','个人习惯'],['customer','客户'],['case','项目 / 订单']],scope,'knowledge-scope','知识范围')}
     <div class="toolbar">${searchField('knowledge-search','搜索客户与知识','搜索客户、项目或知识…',knowledgeState.query)}<button id="clear-knowledge-search" ${knowledgeState.query?'':'disabled'}>清空搜索</button></div>
     <div class="object-workspace"><article class="card object-index">${entities.map(entity=>`<button class="object-choice ${current?.id===entity.id?'selected':''}" data-knowledge-entity="${E(entity.id)}" aria-pressed="${current?.id===entity.id}"><strong>${E(entity.name)}</strong><small>${scoped.filter(k=>scope==='personal'||k.subject_id===entity.id).length} 条知识</small></button>`).join('')||'<div class="empty">暂无匹配对象</div>'}</article>
-    <div>${card(current?E(current.name):'知识',items.map(k=>`<div class="knowledge-row"><div><span class="badge">${k.confirmed?'已确认':'候选'}</span><p class="prewrap">${E(k.content)}</p></div><button data-edit-knowledge="${E(k.knowledge_id)}">${k.confirmed?'编辑':'确认 / 编辑'}</button></div>`).join('')||'<div class="empty">暂无知识</div>',`<small>${items.length} 条</small>`)}
+    <div>${card(current?E(current.name):'知识',items.map(k=>`<div class="knowledge-row"><div><span class="badge">${k.confirmed?'已确认':'候选'}</span><p class="prewrap">${E(k.content)}</p></div><button data-edit-knowledge="${E(k.knowledge_id)}">${k.confirmed?'编辑':'确认 / 编辑'}</button></div>`).join('')||'<div class="empty">暂无知识</div>',`<div class="button-row"><small>${items.length} 条</small>${current?'<button id="knowledge-organize">整理原文</button>':''}</div>`)}
+    ${current?knowledgeReviewPanel(scope,scope==='personal'?null:current.id):''}
     ${contacts.length||cases.length?`<details class="card related-objects"><summary>联系人 ${contacts.length} · 项目 / 订单 ${cases.length}</summary><div class="card-body">${contacts.map(c=>`<div class="compact-row"><strong>${E(c.name)}</strong><span>${E(c.address)}</span></div>`).join('')}${cases.map(c=>`<div class="compact-row"><span>${E(c.title)}</span>${badge('',c.stage||'未设阶段')}</div>`).join('')}</div></details>`:''}
     ${scope==='case'&&current?`<div class="small muted">${E(data.cases.find(c=>c.case_id===current.id)?.stage||'未设阶段')}</div>`:''}</div></div>`;
+  const subject=scope==='personal'?null:current?.id;
+  if(current) $('#knowledge-organize').onclick=()=>openKnowledgeInput(scope,subject,current.name);
+  if($('#knowledge-refresh')) $('#knowledge-refresh').onclick=attempt(refresh);
+  document.querySelectorAll('[data-knowledge-review]').forEach(button=>button.onclick=attempt(async()=>{
+    await api('/reviews/'+button.dataset.knowledgeReview,'POST',{accept:button.dataset.accept==='true'});
+    await refresh();
+    toast(button.dataset.accept==='true'?'知识已确认入库':'已忽略建议');
+  }));
+  document.querySelectorAll('[data-knowledge-withdraw]').forEach(button=>button.onclick=attempt(async()=>{
+    await api('/knowledge-ai/withdraw/'+button.dataset.knowledgeWithdraw,'POST',{});
+    await refresh();
+  }));
+  document.querySelectorAll('[data-knowledge-retry]').forEach(button=>button.onclick=()=>{
+    const job=data.knowledge_jobs.find(j=>j.job_id===button.dataset.knowledgeRetry);
+    openKnowledgeInput(scope,subject,current.name,job.raw);
+  });
   bindTabs('[data-knowledge-scope]', key => {
     knowledgeState.scope = key;
     knowledgeState.entityId = null;
@@ -1119,10 +1372,64 @@ async function refreshMailProgress() {
   }
 }
 
+function draftSettingsCard() {
+  const cfg = data.draft_ai;
+  return card('邮件草稿、待办与知识整理', `<form id="draft-ai-settings" class="card-body form-grid compact-form">
+    <label>执行方式<select name="mode"><option value="workbuddy">WorkBuddy 队列</option><option value="api" ${cfg.mode==='api'?'selected':''}>模型 API</option></select></label>
+    <fieldset id="draft-provider-fields" ${cfg.mode==='api'?'':'hidden'}>
+      <label>服务商<select name="provider">${Object.entries(data.draft_providers).map(([id,name])=>`<option value="${id}" ${cfg.provider===id?'selected':''}>${E(name)}</option>`).join('')}</select></label>
+      <label>模型 ID<input name="model" maxlength="160" value="${E(cfg.model)}" placeholder="填写服务商控制台中的模型 ID"></label>
+      <label>API Key<input name="key" type="password" autocomplete="new-password" placeholder="留空沿用已保存的密钥"></label>
+      <p class="form-note">草稿仅发送相关邮件、知识和反馈。整理待办时，所选服务商会收到所选原文及未关闭待办的标题、描述、状态和截止日期。知识整理仅发送所选对象名称、范围和原文。</p>
+    </fieldset>
+    <div class="button-row"><button class="primary" type="submit">保存 AI 设置</button><button id="test-draft-api" type="button" ${cfg.mode==='api'?'':'hidden'}>用合成邮件测试连接</button></div>
+    <span role="status" id="draft-settings-status"></span></form>`);
+}
+
+function wireDraftSettings() {
+  const form = $('#draft-ai-settings'), fields = form.elements;
+  const sync = () => {
+    const enabled = fields.mode.value === 'api';
+    $('#draft-provider-fields').hidden = !enabled;
+    fields.model.required = enabled;
+    $('#test-draft-api').hidden = !enabled;
+    $('#test-draft-api').disabled = !enabled || data.draft_ai.mode !== 'api' ||
+      fields.provider.value !== data.draft_ai.provider || fields.model.value !== data.draft_ai.model || !!fields.key.value;
+  };
+  fields.provider.onchange = () => {
+    fields.key.value = '';
+    fields.model.value = fields.provider.value === data.draft_ai.provider ? data.draft_ai.model : '';
+    sync();
+  };
+  form.oninput = sync;
+  sync();
+  form.onsubmit = attempt(async e => {
+    e.preventDefault();
+    const values = Object.fromEntries(new FormData(form));
+    data.draft_ai = await api('/draft-ai/settings','POST', values.mode==='api' ? values : {mode:'workbuddy'});
+    fields.key.value = '';
+    sync();
+    $('#draft-settings-status').textContent = 'AI 设置已保存';
+  });
+  $('#test-draft-api').onclick = attempt(async e => {
+    const button = e.currentTarget;
+    button.disabled = true;
+    const status = $('#draft-settings-status');
+    status.textContent = '正在测试…';
+    try {
+      await api('/draft-ai/test','POST',{selection:data.draft_ai});
+      status.textContent = '连接成功，模型已返回合成草稿';
+    } catch (error) {
+      status.textContent = error.message;
+    } finally { sync(); }
+  });
+}
+
 function settingsView() {
   $('#workspace-content').innerHTML = `${tabBar([['runtime','运行与 AI'],['accounts','邮箱'],['backup','备份与恢复'],['update','软件更新']],settingsState.tab,'settings-tab','设置分类')}
     <section data-settings-panel="runtime" ${settingsState.tab==='runtime'?'':'hidden'}>
-      <div class="status-strip"><span>${badge('','工作台已连接')}</span><span>AI：${data.health.ai_schedule.enabled?'已启用':'未启用'}</span><button id="health-check">健康检查</button><button id="consume-results">读取 AI 结果</button>${data.accounts.some(a=>a.account_id==='demo')?'<button id="demo-ai">模拟分析</button>':''}</div>
+      <div class="status-strip"><span>${badge('','工作台已连接')}</span><span>WorkBuddy 定时分析：${data.health.ai_schedule.enabled?'已启用':'未启用'}</span><button id="health-check">健康检查</button><button id="consume-results">读取 AI 结果</button>${data.accounts.some(a=>a.account_id==='demo')?'<button id="demo-ai">模拟分析</button>':''}</div>
+      ${draftSettingsCard()}
       <div class="split">${card('执行计划',`<form id="schedule-form" class="card-body form-grid compact-form"><label>工作时区<input name="timezone" value="${E(data.timezone)}"></label><label>每日分析时间<input name="time" type="time" value="${E(data.health.ai_schedule.time)}"></label><label>邮件同步间隔（分钟）<input name="interval" type="number" min="1" max="1440" value="${E(data.imap_interval_minutes)}"></label><div class="form-note">每日一次</div><button type="submit" class="primary">保存计划</button></form>`)}
       ${card('最近任务',`<div class="table-scroll"><table><thead><tr><th>时间</th><th>状态</th></tr></thead><tbody>${data.jobs.slice(0,6).map(j=>`<tr><td>${E(date(j.created_at))}</td><td>${badge('',runStates[j.state]||j.state)}</td></tr>`).join('')||'<tr><td colspan="2">暂无任务</td></tr>'}</tbody></table></div>`)}</div>
       <details class="card related-objects"><summary>运行信息与同步记录</summary><div class="card-body"><p class="prewrap">${E(data.health.workspace)}</p><div class="small muted">Windows / 真实邮箱 / WorkBuddy 无人值守：待验收</div>${data.sync_runs.slice(-5).map(r=>`<div class="compact-row"><time>${E(date(r.started_at))}</time>${badge('',runStates[r.state]||r.state)}</div>`).join('')||'<p>暂无同步记录</p>'}</div></details>
@@ -1141,6 +1448,7 @@ function settingsView() {
       ${card('备份',`<div class="card-body stack compact-form"><div class="button-row"><button data-backup="todos">备份 To Do</button><button data-backup="full" class="primary">完整备份</button></div><span class="form-note">普通 ZIP，无需密码，不含邮箱授权码</span></div>`)}
       ${card('恢复',`<form id="restore-form" class="card-body stack compact-form"><label>备份文件<input type="file" name="file" accept=".zip" required></label><button type="submit">校验备份</button><div id="restore-preview" class="small prewrap"></div><button type="button" id="apply-restore" class="primary" hidden>确认恢复</button></form>`)}</div>
     </section>`;
+  wireDraftSettings();
   bindTabs('[data-settings-tab]', key => {
     settingsState.tab = key;
     sessionStorage.setItem('workthread-settings-tab', key);

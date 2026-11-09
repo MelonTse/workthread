@@ -10,6 +10,14 @@
 
 ## 自动选择 Skill（WorkBuddy 5.9.3）
 
+当 job_type 为 knowledge_assist，调用 workthread-knowledge，按 context.instructions 整理 context.material 中的原文，返回待人工确认的建议。
+
+网页原文整理任务（knowledge_assist）使用 context.instructions 作为业务规则，只处理 context.material。返回 JSON 时原样复制顶层 schema_version、workspace_id、workspace_epoch、job_id、input_sha256，再添加 suggestions 数组。每项仅含 content 和 quote，quote 必须逐字来自 raw。禁止增加对象、改变范围或附带其他操作。无适用知识时返回空数组。将结果原子写到 exchange/outputs/<job_id>.json。Python 回执中的 proposed 表示产生的待确认条数，用户在网页逐条确认后才进入知识库。
+
+当 job_type 为 todo_assist，调用 workthread-analysis，优先执行 context.instructions 中的待办规则。只使用本任务的 sources 和 todos。输出 JSON 顶层原样复制 schema_version、workspace_id、workspace_epoch、job_id、input_sha256，另加 decisions 数组（格式见本任务 instructions）；不写综合分析的 operations。原子写入 exchange/outputs/<job_id>.json，等 Python 回执再报告入库。
+
+当输入的 job_type 为 mail_draft，调用 workthread-analysis 并按该任务的 context.instructions 执行。输入仅含目标邮件及适用资料；只返回目标邮件的一个 create_draft 操作，reviewed_todo_ids 为空。此任务优先于综合对账步骤。
+
 根据任务内容调用客户端的真实 Skill 工具，无需用户每次指定名称：
 
 - 邮件分析、业务分类、人物/客户/项目关联、英文回复草稿和 To Do 对账：调用 `workthread-analysis`。

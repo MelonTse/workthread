@@ -119,7 +119,7 @@ output = obj(
 input_schema = obj(
     {
         **base,
-        "job_type": {"enum": ["reconcile", "normalize", "historical"]},
+        "job_type": {"enum": ["reconcile", "normalize", "historical", "mail_draft","todo_assist","knowledge_assist"]},
         "rules_version": s,
         "created_at": s,
         "timezone": s,
@@ -141,6 +141,22 @@ input_schema = obj(
         },
     }
 )
+general_context = input_schema["properties"]["context"]
+input_schema["properties"]["context"] = {"type": "object"}
+input_schema["allOf"] = [{
+    "if": {"properties": {"job_type": {"const": "mail_draft"}}},
+    "then": {"properties": {"context": {"type": "object", "required": [
+        "target_message_id", "messages", "knowledge", "execution", "instructions", "material_hash"
+    ]}}},
+    "else": {"if": {"properties":{"job_type":{"const":"todo_assist"}}},
+             "then":{"properties":{"context":{"type":"object","required":["sources","todos","instructions","execution"]}}},
+             "else":{"properties":{"context":general_context}}},
+}]
+input_schema["allOf"][0]["else"]["else"] = {
+    "if": {"properties": {"job_type": {"const": "knowledge_assist"}}},
+    "then": {"properties": {"context": {"required": ["material", "subject_id", "fingerprint", "instructions", "execution"]}}},
+    "else": {"properties": {"context": general_context}},
+}
 intake = obj(
     {
         "schema_version": {"const": "1.0"},

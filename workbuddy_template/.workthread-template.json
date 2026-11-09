@@ -30,9 +30,13 @@
     ".codebuddy/skills/workthread-analysis/SKILL.md": "04703e0fde53a9301b4fe6f798dbce8d2d420c9f34e4ea7ea8a17021617a9bb4",
     ".codebuddy/skills/workthread-intake/SKILL.md": "f69ef158df859aff971512930431f55e86dc97a38fd4613ffde03704d3ab5245",
     ".codebuddy/skills/workthread-knowledge/SKILL.md": "0065c6d646f6d870505f989c698aff3907e406a6b6cd796be9904f033c7a2fa3",
-    "CODEBUDDY.md": "39d9693fd765907b292af53a6135f239230d45721577104c68fb22e5a0227a7c",
-    "schemas/ai-input.json": "b8e7b23e087054c2799100997a6033cb8557f0f5d15e3bc905e9ac2d748c2731",
+    "CODEBUDDY.md": "a660723c46b5fa1e1b0da7baed5ba079e5d83f7a0c9d5bb2ed89b20309cd83bf",
+    "schemas/ai-input.json": "1c3942025909d2de24943d6f92f5dda1e1fee2856f715e57293beaf6207b7795",
     "schemas/ai-output.json": "30313c7f58f7f2217a9f6a2b739a9514563c57398849770e3637cada9863835a",
     "schemas/intake.json": "18342162d1dda592184e548d033d3e25f595b8043b2dc66d09c02784a41e034b"
+  },
+  "rc4_previous_hashes": {
+    "CODEBUDDY.md": "39d9693fd765907b292af53a6135f239230d45721577104c68fb22e5a0227a7c",
+    "schemas/ai-input.json": "b8e7b23e087054c2799100997a6033cb8557f0f5d15e3bc905e9ac2d748c2731"
   }
 }

@@ -1,4 +1,4 @@
-"""Loopback-only Flask HTTP interface. Models are invoked solely by WorkBuddy."""
+"""Loopback-only Flask HTTP interface. External draft generation requires explicit user selection."""
 
 import hmac
 import secrets
@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify, render_template, session, send_file
 from jsonschema import ValidationError
 from werkzeug.wsgi import ClosingIterator
 from .core import Conflict, DeadlineError, now, uid, dumps, load
+from . import draft_api, draft_tasks, knowledge_tasks, todo_assist
 from .ai import Bridge
 from .operations import backup, backup_filename, restore, import_legacy, undo_import
 
@@ -136,11 +137,29 @@ def create_app(store, updates=None):
             )
             for key in ("imap_interval_minutes", "timezone", "profile", "ai_schedule"):
                 result[key] = load(c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()[0])
+            result["todo_ai_history"] = rows("""SELECT j.job_id,j.state,j.error,j.created_at,a.payload
+                FROM ai_jobs j LEFT JOIN audit_events a ON a.target_id=j.job_id AND a.kind='todo_assist_saved'
+                WHERE j.job_type='todo_assist' ORDER BY j.created_at DESC LIMIT 6""")
+            result["knowledge_jobs"] = rows("""WITH latest AS (
+                SELECT *,row_number() OVER (PARTITION BY json_extract(input_json,'$.context.fingerprint')
+                  ORDER BY created_at DESC,rowid DESC) AS position FROM ai_jobs WHERE job_type='knowledge_assist'
+                  AND json_extract(input_json,'$.workspace_epoch')=(SELECT json_extract(value,'$') FROM settings WHERE key='workspace_epoch')
+                ) SELECT job_id,state,error,created_at,
+                json_extract(input_json,'$.context.material.scope') AS scope,
+                json_extract(input_json,'$.context.subject_id') AS subject_id,
+                json_extract(input_json,'$.context.material.raw') AS raw,
+                json_array_length(result_json,'$.suggestions') AS proposed
+                FROM latest WHERE position=1 AND (state IN ('pending','running','failed')
+                OR (state='completed' AND json_array_length(result_json,'$.suggestions')=0))
+                ORDER BY created_at DESC""")
+            ai_config = c.execute("SELECT value FROM settings WHERE key='draft_ai'").fetchone()
+            result["draft_ai"] = load(ai_config[0]) if ai_config else draft_api.DEFAULT.copy()
         schedule = result.pop("ai_schedule")
         result["health"] = (
             {"workspace": str(store.root), "ai_schedule": schedule}
             if compact else store.health()
         )
+        result["draft_providers"] = {k: v[0] for k, v in draft_api.PROVIDERS.items()}
         return jsonify(result)
 
     @app.get("/api/v1/system/status")
@@ -219,8 +238,15 @@ def create_app(store, updates=None):
                 "ORDER BY created_at DESC",
                 (mid,),
             ).fetchall()
+            draft_jobs = c.execute(
+                """SELECT job_id,state,error FROM ai_jobs WHERE job_type='mail_draft'
+                   AND json_extract(input_json,'$.context.target_message_id')=?
+                   ORDER BY created_at DESC LIMIT 5""",
+                (mid,),
+            ).fetchall()
         return jsonify(
             message=dict(message),
+            draft_jobs=[dict(j) for j in draft_jobs],
             drafts=[dict(d) for d in drafts],
             feedback=[dict(f) for f in feedback],
             analyses=[dict(a) for a in analyses],
@@ -261,7 +287,7 @@ def create_app(store, updates=None):
     def prepare():
         pending = [
             {"job_id": row["job_id"]}
-            for row in store.rows("SELECT job_id, input_json FROM ai_jobs WHERE state='pending'")
+            for row in store.rows("SELECT job_id, input_json FROM ai_jobs WHERE state='pending' AND job_type NOT IN ('mail_draft','todo_assist','knowledge_assist')")
             if not load(row["input_json"])["context"].get("draft_rewrite")
         ]
         if pending:
@@ -331,9 +357,104 @@ def create_app(store, updates=None):
             message_id=draft["message_id"],
         ), 201
 
+    @app.post("/api/v1/draft-ai/settings")
+    def configure_draft_ai():
+        p = request.get_json()
+        mode = p.get("mode")
+        if mode == "workbuddy":
+            store.set_setting("draft_ai", {**draft_api.settings(store), "mode": mode})
+        elif mode == "api":
+            provider, model = p.get("provider"), p.get("model")
+            draft_api.validate_selection(provider, model)
+            secret = p.get("key", "")
+            if secret:
+                if not isinstance(secret, str) or not secret.strip() or not secret.isascii() or not secret.isprintable() or len(secret) > 2048:
+                    raise ValueError("API Key 格式无效")
+                draft_api.keyring.set_password("workthread", draft_api.credential_id(store, provider), secret.strip())
+            else:
+                draft_api.get_key(store, provider)
+            store.set_setting("draft_ai", {"mode": mode, "provider": provider, "model": model})
+        else:
+            raise ValueError("未知草稿模式")
+        return jsonify(draft_api.settings(store))
+
+    def selected_ai_mode():
+        config = draft_api.settings(store)
+        if request.get_json().get("selection") != config:
+            raise Conflict("AI 设置已更改，请刷新页面确认服务商")
+        return config if config["mode"] == "api" else {"mode": "workbuddy"}
+
+    @app.post("/api/v1/draft-ai/test")
+    def test_draft_ai():
+        config = selected_ai_mode()
+        if config["mode"] != "api":
+            raise ValueError("请先保存 API 配置")
+        draft_api.generate(config["provider"], config["model"], draft_api.get_key(store, config["provider"]),
+                           {"subject": "Synthetic test", "body_text": "Please confirm receipt of this test."})
+        return jsonify(ok=True)
+
+    @app.get("/api/v1/todo-ai/scope")
+    def todo_ai_scope():
+        rows = todo_assist.mail_scope(store, request.args.get("historical") == "1")
+        return jsonify(count=len(rows), mails=rows[: todo_assist.BATCH])
+
+    @app.post("/api/v1/todo-ai/inputs")
+    def capture_todo():
+        p = request.get_json()
+        return jsonify(
+            input_id=todo_assist.capture(store, p.get("raw"), p.get("token"))
+        )
+
+    @app.post("/api/v1/todo-ai/run")
+    def run_todo_ai():
+        return jsonify(todo_assist.execute(b, request.get_json(), selected_ai_mode()))
+
+    @app.post("/api/v1/todo-ai/reviews/<rid>")
+    def resolve_todo_ai(rid):
+        return jsonify(todo_assist.resolve(store, rid, request.get_json()))
+
+    @app.post("/api/v1/todo-ai/withdraw/<jid>")
+    def withdraw_todo_ai(jid):
+        with store.db() as c:
+            changed = c.execute(
+                "UPDATE ai_jobs SET state='withdrawn',updated_at=? WHERE job_id=? AND job_type='todo_assist' AND state='pending'",
+                (now(), jid),
+            )
+            if not changed.rowcount:
+                raise Conflict("待办任务已结束")
+            (b.exchange / "inputs" / (jid + ".json")).unlink(missing_ok=True)
+        return jsonify(state="withdrawn")
+
+    @app.post("/api/v1/mail/<mid>/draft")
+    def generate_draft(mid):
+        return jsonify(draft_tasks.execute(b, mid, request.get_json().get("draft_id"), selected_ai_mode()))
+
+    @app.post("/api/v1/draft-jobs/<jid>/withdraw")
+    def withdraw_draft(jid):
+        with store.db() as db:
+            changed = db.execute("""UPDATE ai_jobs SET state='withdrawn',updated_at=? WHERE job_id=?
+                                AND job_type='mail_draft' AND state='pending'""", (now(), jid))
+            if not changed.rowcount:
+                raise Conflict("该任务已结束，请刷新")
+            # Use the stored identifier, already constrained by the exact DB match.
+            (b.exchange / "inputs" / (jid + ".json")).unlink(missing_ok=True)
+        return jsonify(state="withdrawn")
+
     @app.post("/api/v1/drafts/<did>/queue")
     def queue_draft(did):
         return jsonify(b.queue_draft_rewrite(did))
+
+    @app.post("/api/v1/knowledge-ai/run")
+    def organize_knowledge():
+        return jsonify(knowledge_tasks.execute(b, request.get_json(), selected_ai_mode()))
+
+    @app.post("/api/v1/knowledge-ai/withdraw/<jid>")
+    def withdraw_knowledge(jid):
+        with store.db() as db:
+            if not db.execute("UPDATE ai_jobs SET state='withdrawn',updated_at=? WHERE job_id=? AND job_type='knowledge_assist' AND state='pending'", (now(), jid)).rowcount:
+                raise Conflict("知识任务已结束")
+        (b.exchange / "inputs" / (jid + ".json")).unlink(missing_ok=True)
+        return jsonify(state="withdrawn")
 
     @app.post("/api/v1/knowledge")
     def knowledge():

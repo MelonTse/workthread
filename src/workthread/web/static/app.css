@@ -65,3 +65,108 @@ dialog{position:fixed;inset:0 0 0 auto;margin:0;width:540px;max-width:100%;heigh
  .shell{transition:none}
 }
 @media(prefers-reduced-motion:reduce){.sidebar,.shell,.sidebar .brand>span:last-child,#nav-toggle,#nav-toggle .toggle-chevron,.nav-label,#navigation button>span,.sidebar-bottom{transition:none}}
+
+#draft-ai-settings {margin-bottom: 16px}
+#draft-provider-fields {grid-column: 1 / -1; border: 0; padding: 0; margin: 0; min-width: 0}
+#draft-provider-fields:not([hidden]) {display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,180px),1fr)); gap: 12px}
+#draft-provider-fields .form-note {grid-column: 1 / -1; margin: 0}
+.draft-job-info {display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:12px 0; color:var(--muted)}
+
+
+/* To Do keeps the ledger, pending decisions and execution history in separate views. */
+body[data-view=todos] #workspace-content {container-type:inline-size}
+body[data-view=todos] .quick-capture,
+[data-lane-panel][hidden], [data-review-sheet][hidden], #clear-todo-search[hidden] {display:none}
+.todo-workbar, .todo-tools, .ledger-tools, .job-ledger header, .review-sheet footer,
+.todo-compose header, .todo-compose footer {display:flex;align-items:center;gap:10px}
+.todo-workbar {justify-content:space-between;border-bottom:1px solid var(--line);margin-bottom:20px;gap:16px}
+.todo-workbar .section-tabs {align-self:stretch;align-items:stretch;gap:26px;margin:0;border:0}
+.todo-workbar .section-tabs button {padding:13px 0 14px}
+.todo-tools {margin-bottom:7px;flex-wrap:wrap}
+.todo-tools button {background:#fff;padding:7px 11px}
+.task-ledger, .job-ledger, .review-workspace {background:#fff;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.ledger-tools {padding:14px 18px;flex-wrap:wrap}
+.ledger-tools .search-field {flex:1 1 170px;max-width:340px;background:white}
+.ledger-tools select, .ledger-tools button {font-size:12px}
+#todo-count {margin-left:auto;color:#617482;font-variant-numeric:tabular-nums}
+.ledger-columns, #todo-list .todo-row {display:grid;grid-template-columns:minmax(0,1fr) 140px 88px;align-items:center;gap:16px;padding:11px 20px}
+.ledger-columns {background:#f4f6f7;color:#5f7281;font-size:11px;border-block:1px solid var(--line)}
+#todo-list .todo-row {margin:0;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none}
+#todo-list .todo-row:last-child {border-bottom:0}
+#todo-list .todo-row:hover {background:#f7f9fa}
+#todo-list .todo-row.selected {background:#fcf4f7;box-shadow:inset 3px 0 var(--rose)}
+#todo-list .todo-meta {margin-top:2px}
+#todo-list .todo-row>.badge {justify-self:start}
+.task-date {font-size:12px;color:#526776;font-variant-numeric:tabular-nums}
+.task-ledger .scope-bar {margin:0 18px 12px}
+.review-workspace {display:grid;grid-template-columns:minmax(175px,24%) minmax(0,1fr)}
+.review-workspace.single-review {display:block;max-width:840px}
+.review-links {display:flex;gap:15px;flex-wrap:wrap}
+.review-index {background:#f3f5f6;border-right:1px solid var(--line);padding:10px}
+.review-index button {display:block;width:100%;text-align:left;padding:12px;border:1px solid transparent;background:transparent;min-width:0}
+.review-index button[aria-pressed=true] {background:#fff;border-color:var(--line);box-shadow:inset 3px 0 var(--rose)}
+.review-index small {display:block;font-size:11px;color:#697e8b;margin-bottom:5px}
+.review-index strong {display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.review-main {min-width:0}
+.review-sheet {padding:clamp(18px,2.3vw,30px);max-width:850px;overflow-wrap:anywhere}
+.review-sheet h2, .job-ledger h2, .todo-compose h2 {font-size:19px;letter-spacing:-.02em;margin:0;color:var(--ink)}
+.review-sheet p,.review-sheet small,.review-evidence {color:#536674}
+.review-note {margin:6px 0 20px;font-size:13px}
+.merge-comparison {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0;margin:20px 0;border:0}
+.merge-comparison legend {font-size:12px;color:#536674;margin:0 0 8px;padding:0}
+.merge-comparison label {position:relative;display:grid;gap:6px;border:1px solid #ced7de;padding:13px;border-radius:4px;cursor:pointer}
+.merge-comparison label:has(:checked) {border-color:#d27c97;background:#fff7fa}
+.merge-comparison label>span,.merge-comparison small {font-size:11px;color:#617482}
+.merge-comparison strong {font-size:15px}
+.merge-comparison input {position:absolute;top:12px;right:12px;width:15px;height:15px;margin:0;accent-color:var(--rose)}
+.review-sheet blockquote, .timeline-item blockquote {margin:12px 0 7px;border-left:2px solid #b9c6d0;padding:6px 12px;background:#f6f8fa;color:#455c6b;font-size:13px;white-space:pre-wrap}
+.review-evidence {margin:14px 0 4px}
+.review-sheet footer {margin:18px 0 0;border-top:1px solid var(--line);padding-top:16px}
+.separate-action {font-size:12px;color:#627684;margin-top:13px}
+.separate-action summary {cursor:pointer;width:fit-content}
+.review-date {display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:12px 0}
+.review-date label {display:flex;align-items:center;gap:6px}
+.job-ledger header {justify-content:space-between;padding:15px 20px}
+.job-ledger h2 {font-size:15px}
+.job-entry {display:grid;grid-template-columns:minmax(120px,160px) minmax(80px,110px) 1fr;gap:14px;align-items:baseline;padding:12px 20px;border-top:1px solid var(--line);font-size:13px;overflow-wrap:anywhere}
+.job-entry time {color:#617482;font-size:12px}
+.job-entry .text-link {margin-left:6px}
+.todo-compose {inset:0;margin:auto;width:min(470px,calc(100% - 28px));height:fit-content;max-height:85vh;padding:22px;border:1px solid var(--line);border-radius:7px;box-shadow:0 12px 58px #14253629;overflow:auto}
+.todo-compose[open] {display:block;animation:none}
+.todo-compose::backdrop {background:#13253133}
+.todo-compose header {justify-content:space-between;margin-bottom:18px}
+.todo-compose header button {font-size:20px;width:32px;height:32px;padding:0}
+.todo-compose footer {justify-content:flex-end;margin-top:16px}
+.todo-compose footer small {margin-right:auto;color:#5d7181}
+.todo-compose textarea {display:block;width:100%;min-height:100px;margin-top:7px}
+.todo-compose label {font-size:13px}
+.todo-compose .compose-error {color:#a1244b;font-size:13px}
+.todo-compose .compose-error:empty {display:none}
+#todo-mail-preview {max-height:40vh;overflow:auto}
+.todo-mail-option {display:block;border-top:1px solid var(--line);padding:9px 0}
+.todo-proposal {border-left:2px solid var(--line);padding:8px 16px;margin:14px 0}
+.timeline-item blockquote {margin:8px 0;font-size:12px}
+@container (max-width:700px) {
+ .todo-workbar {align-items:flex-start;flex-direction:column;gap:0;margin-bottom:12px}
+ .todo-workbar .section-tabs {gap:18px}
+ .todo-tools {margin:6px 0 10px}
+ .ledger-tools {padding:10px;gap:6px}
+ .ledger-columns,#todo-list .todo-row {grid-template-columns:minmax(0,1fr) 84px 56px;padding:10px;gap:8px}
+ .review-workspace {grid-template-columns:1fr}
+ .review-index {display:flex;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:6px}
+ .review-index button {width:fit-content;max-width:200px;flex-shrink:0;padding:6px 12px}
+ .review-index small {margin-bottom:2px}
+ .job-entry {grid-template-columns:1fr auto;gap:4px}
+ .job-entry div {grid-column:1/-1}
+}
+@container (max-width:440px) {
+ .ledger-tools .search-field {flex-basis:100%;max-width:none}
+ .merge-comparison {grid-template-columns:1fr}
+ .review-sheet {padding:16px}
+}
+
+.knowledge-proposal,.knowledge-job {padding:14px 20px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.knowledge-proposal p {margin:0 0 7px;font-size:14px}
+.knowledge-proposal blockquote {margin:8px 0 12px;padding:5px 12px;border-left:2px solid #b9c6d0;color:#546b7b;background:#f7f9fa;white-space:pre-wrap}
+.knowledge-job {display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12px}
+.knowledge-job span,.knowledge-job small {color:#607583}

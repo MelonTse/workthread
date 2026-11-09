@@ -141,7 +141,7 @@ def main(argv=None):
     elif a.command == "init":
         result = {"workspace": str(store.root), "initialized": True, "deployment": deployment}
     elif a.command == "ai-prepare":
-        pending = store.rows("SELECT job_id FROM ai_jobs WHERE state='pending'")
+        pending = store.rows("SELECT job_id FROM ai_jobs WHERE state='pending' AND job_type NOT IN ('mail_draft','todo_assist','knowledge_assist')")
         result = pending or [{"job_id": j["job_id"]} for j in bridge.prepare()]
     elif a.command == "reindex":
         with store.db() as c:
@@ -169,7 +169,7 @@ def main(argv=None):
 
         jobs = [
             json.loads(j["input_json"])
-            for j in store.rows("SELECT * FROM ai_jobs WHERE state='pending'")
+            for j in store.rows("SELECT * FROM ai_jobs WHERE state='pending' AND job_type NOT IN ('mail_draft','todo_assist','knowledge_assist')")
         ]
         if not jobs:
             jobs = bridge.prepare()

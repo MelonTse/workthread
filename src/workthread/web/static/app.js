@@ -1047,6 +1047,11 @@ async function refreshMailProgress() {
       if (!status) continue;
       const [label, action] = syncLabels[status.state] || syncLabels.failed;
       const lines = [label];
+      if (status.sent_unresolved) {
+        if (status.state === 'partial') lines[0] = '本轮收件箱拉取结束';
+        lines.push('已发送文件夹未能自动识别，请打开本邮箱的“文件夹设置”。');
+      }
+      if (status.sent_configured && status.state === 'partial') lines[0] = '文件夹设置已保存，可再次拉取';
       if (status.state === 'reconnecting') lines[0] += '，第 ' + status.attempt + ' 次自动重连';
       if (status.folder && ['running','interrupted','reconnecting','blocked'].includes(status.state)) {
         lines[0] += ' · ' + status.folder;
@@ -1077,7 +1082,7 @@ function settingsView() {
       <details class="card related-objects"><summary>运行信息与同步记录</summary><div class="card-body"><p class="prewrap">${E(data.health.workspace)}</p><div class="small muted">Windows / 真实邮箱 / WorkBuddy 无人值守：待验收</div>${data.sync_runs.slice(-5).map(r=>`<div class="compact-row"><time>${E(date(r.started_at))}</time>${badge('',runStates[r.state]||r.state)}</div>`).join('')||'<p>暂无同步记录</p>'}</div></details>
     </section>
     <section data-settings-panel="accounts" ${settingsState.tab==='accounts'?'':'hidden'}>
-      ${card('邮箱',data.accounts.map(a=>`<div class="account-row"><div><strong>${E(a.label)}</strong><p>${E(a.username)} · ${a.enabled?'同步已启用':'同步已暂停'}</p><div class="small muted prewrap" role="status" data-mail-progress></div></div><div class="button-row"><button data-sync="${E(a.account_id)}" disabled>读取状态…</button>${a.account_id!=='demo'?`<button data-account-toggle="${E(a.account_id)}">${a.enabled?'暂停':'启用'}同步</button>`:''}</div></div>`).join('')||'<div class="empty">暂无邮箱</div>')}
+      ${card('邮箱',data.accounts.map(a=>`<div class="account-row"><div><strong>${E(a.label)}</strong><p>${E(a.username)} · ${a.enabled?'同步已启用':'同步已暂停'}</p><div class="small muted prewrap" role="status" data-mail-progress></div></div><div class="button-row"><button data-sync="${E(a.account_id)}" disabled>读取状态…</button>${a.account_id!=='demo'?`<button data-folder-settings="${E(a.account_id)}">文件夹设置</button><button data-account-toggle="${E(a.account_id)}">${a.enabled?'暂停':'启用'}同步</button><button data-remove-account="${E(a.account_id)}">移除邮箱</button>`:''}</div></div>`).join('')||'<div class="empty">暂无邮箱</div>')}
       <details class="card related-objects" id="account-editor"><summary>添加邮箱</summary>
       <form id="account-form" class="card-body form-grid compact-form"><label>名称<input name="label" required></label><label>账号<input name="username" required autocomplete="off"></label><label>IMAP 主机<input name="host" placeholder="imap.example.org" required></label><label>TLS 端口<input name="port" type="number" value="993"></label><label class="wide">授权码<input name="password" type="password" autocomplete="new-password"></label>
       <details class="wide advanced-fields"><summary>文件夹设置</summary><div class="form-grid"><label>收件箱<input name="inbox_folder" placeholder="INBOX"></label><label>已发送<input name="sent_folder" placeholder="自动识别"></label><label class="wide">其他文件夹<input name="extra_folders" placeholder="逗号分隔"></label></div></details>
@@ -1156,12 +1161,58 @@ function settingsView() {
     submittedSyncs.add(id);
     try {
       const result = await api('/accounts/' + encodeURIComponent(id) + '/sync', 'POST', {});
-      toast(syncLabels[result.state][0]);
+      toast(result.sent_unresolved && result.state === 'partial' ? '收件箱拉取结束，请选择已发送文件夹' : syncLabels[result.state][0]);
       await refresh();
     } finally {
       submittedSyncs.delete(id);
       await refreshMailProgress();
     }
+  }));
+  document.querySelectorAll('[data-folder-settings]').forEach(button => button.onclick = attempt(async () => {
+    const path = '/accounts/' + encodeURIComponent(button.dataset.folderSettings) + '/folders';
+    button.disabled = true;
+    button.textContent = '读取文件夹…';
+    try {
+      const options = await api(path, 'POST', {});
+      if (!button.isConnected || settingsState.tab !== 'accounts') return;
+      closeDetail();
+      $('#detail-dialog').className = '';
+      $('#dialog-label').textContent = '文件夹设置';
+      $('#detail-content').innerHTML = `<form class="stack compact-form" id="sent-settings">
+        <label>已发送邮件所在的文件夹<select required name="sent"><option value="">请选择</option>
+        ${options.names.map((name, i) => `<option value="${i}">${E(name)}</option>`).join('')}
+        <option value="skip">跳过已发送文件夹</option></select></label>
+        <button class="primary">保存文件夹设置</button></form>`;
+      const form = $('#sent-settings');
+      const current = options.automatic ? options.detected : options.current;
+      const index = options.names.indexOf(current);
+      if (index >= 0) form.elements.sent.value = String(index);
+      else if (!options.automatic && current === null) form.elements.sent.value = 'skip';
+      form.onsubmit = attempt(async e => {
+        e.preventDefault();
+        const value = form.elements.sent.value;
+        if (!value) return;
+        const save = form.querySelector('button');
+        save.disabled = true;
+        try {
+          await api(path, 'POST', {sent: value === 'skip' ? null : options.names[Number(value)]});
+          if (form.isConnected) closeDetail();
+          toast('设置已保存，下次拉取时生效');
+          await refreshMailProgress();
+        } finally { save.disabled = false }
+      });
+      $('#detail-dialog').showModal();
+    } finally {
+      button.disabled = false;
+      button.textContent = '文件夹设置';
+    }
+  }));
+  document.querySelectorAll('[data-remove-account]').forEach(button => button.onclick = attempt(async () => {
+    const account = data.accounts.find(a => a.account_id === button.dataset.removeAccount);
+    if (!confirm(`移除邮箱“${account.label}”（${account.username}）并删除本机保存的授权码？已归档邮件、待办和知识将保留。`)) return;
+    await api('/accounts/' + encodeURIComponent(account.account_id), 'DELETE');
+    await refresh();
+    toast('邮箱已移除，已归档邮件已保留');
   }));
   document.querySelectorAll('[data-account-toggle]').forEach(el => el.onclick = attempt(async () => {
     const a = data.accounts.find(x => x.account_id === el.dataset.accountToggle);

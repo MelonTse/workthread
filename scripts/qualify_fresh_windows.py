@@ -1,6 +1,5 @@
 """Windows integration test. Uses disposable frozen programs and an offline release feed."""
 
-import hashlib
 import json
 import os
 import shutil
@@ -61,10 +60,14 @@ def main():
         run(["git", "archive", "--format=zip", "-o", str(archive), "HEAD"], cwd=ROOT)
         with zipfile.ZipFile(archive) as z:
             z.extractall(source)
-        sha = subprocess.check_output(
+        next_sha = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
-        next_sha = hashlib.sha1(("qualification-rc5-" + sha).encode()).hexdigest()
+        sha = "b8d08dbb73c25dba347e323bfe0db420da20ac06"
+        old_source = tmp / "rc4-source"
+        run(["git", "archive", "--format=zip", "-o", str(archive), sha], cwd=ROOT)
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(old_source)
         key = Ed25519PrivateKey.generate()
         secret, public = tmp / "fixture.raw", tmp / "release-public.hex"
         secret.write_bytes(key.private_bytes_raw())
@@ -104,7 +107,7 @@ def main():
         )
         # Restrict just the release transport in the disposable test checkout. No fixture
         # endpoint, runtime override or test signing authority in the shipping source.
-        module = source / "src/workthread/updating/releases.py"
+        module = old_source / "src/workthread/updating/releases.py"
         with module.open("a", encoding="utf-8") as f:
             f.write("\n\ndef fetch(url, limit, out=None):\n")
             links = {
@@ -121,14 +124,14 @@ def main():
             f.write(
                 "    data = path.read_bytes()\n    assert len(data) <= limit\n    if out is None: return data\n    out.write(data)\n"
             )
-        old = build(source, tmp, env, sha, "1.0.0rc4")
+        old = build(old_source, tmp, env, sha, "1.0.0rc4")
         target = tmp / "用户 安装" / "WorkThread"
         args = [
             "powershell.exe",
             "-NoProfile",
             "-NonInteractive",
             "-File",
-            str(ROOT / "scripts/install-windows.ps1"),
+            str(old_source / "scripts/install-windows.ps1"),
             "-InstallRoot",
             str(target),
             "-PackagePath",

@@ -385,6 +385,18 @@ class Sync:
             self.s.root / (".mail-sync-" + digest(account_id) + ".lock"), timeout=0
         )
 
+    @contextlib.contextmanager
+    def exclusive(self, account_id):
+        lock = self._lock(account_id)
+        try:
+            lock.acquire()
+        except Timeout as exc:
+            raise Conflict("该邮箱正在执行其他操作，请稍后重试") from exc
+        try:
+            yield
+        finally:
+            lock.release()
+
     def status(self, account_id):
         status = self.s.setting("mail-sync:" + account_id)
         if status is None:
@@ -433,17 +445,106 @@ class Sync:
             raise
         return client
 
-    def _folders(self, account, client):
+    @staticmethod
+    def _sent_options(client, configured):
+        # IMAPClient decodes LIST names from modified UTF-7. Keep the server's
+        # spelling for SELECT and for the existing UID checkpoints.
+        names, flagged, aliases = [], [], []
+        reserved = {f["name"] for f in configured if f["direction"] != "sent"}
+        for flags, delimiter, name in imap_call(client.list_folders):
+            attrs = {text(flag).lower() for flag in flags}
+            if (
+                attrs & {r"\noselect", r"\nonexistent"}
+                or name.casefold() == "inbox"
+                or name in reserved
+            ):
+                continue
+            names.append(name)
+            if r"\sent" in attrs:
+                flagged.append(name)
+                continue
+            if attrs & {r"\trash", r"\junk", r"\drafts", r"\archive", r"\all"}:
+                continue
+            separator = text(delimiter)
+            parts = name.casefold().split(separator) if separator else [name.casefold()]
+            recognized_parent = len(parts) == 2 and parts[0] in {
+                "inbox",
+                "[gmail]",
+                "[google mail]",
+            }
+            if len(parts) > 1 and not recognized_parent:
+                continue
+            if parts[-1] in {
+                "sent",
+                "sent items",
+                "sent mail",
+                "sent messages",
+                "已发送",
+                "已发送邮件",
+                "已发送邮箱",
+                "已傳送",
+                "已寄件",
+                "寄件備份",
+                "已傳送郵件",
+            }:
+                aliases.append(name)
+        candidates = set(flagged or aliases)
+        return {
+            "names": names,
+            "detected": candidates.pop() if len(candidates) == 1 else None,
+        }
+
+    def folder_settings(self, account_id, change=None):
+        with self.exclusive(account_id):
+            rows = self.s.rows(
+                "SELECT * FROM mail_accounts WHERE account_id=? AND host<>''",
+                (account_id,),
+            )
+            if not rows:
+                raise ValueError("未知邮箱")
+            account = rows[0]
+            configured = load(account["folders"], [])
+            client = self._connect(account)
+            try:
+                options = self._sent_options(client, configured)
+            finally:
+                with contextlib.suppress(Exception):
+                    client.logout()
+            current = next(
+                (f["name"] for f in configured if f["direction"] == "sent"), None
+            )
+            if change is None:
+                return {**options, "current": current, "automatic": not configured}
+            selected = change["sent"]
+            if selected is not None and selected not in options["names"]:
+                raise ValueError("请选择服务器当前列出的文件夹")
+            folders = [f for f in configured if f["direction"] != "sent"]
+            if not folders:
+                folders = [{"name": "INBOX", "direction": "inbox"}]
+            if selected is not None:
+                folders.append({"name": selected, "direction": "sent"})
+            progress = self.s.setting("mail-sync:" + account_id)
+            with self.s.db() as c:
+                c.execute(
+                    "UPDATE mail_accounts SET folders=? WHERE account_id=?",
+                    (dumps(folders), account_id),
+                )
+                if progress and progress.pop("sent_unresolved", False):
+                    progress["sent_configured"] = True
+                    self._save(c, progress)
+            return {"saved": True}
+
+    def _folders(self, account, client, progress):
         configured = load(account["folders"], [])
         if configured:
             return configured
-        for flags, _, name in imap_call(client.list_folders):
-            if b"\\Sent" in flags or "\\Sent" in flags:
-                return [
-                    {"name": "INBOX", "direction": "inbox"},
-                    {"name": name, "direction": "sent"},
-                ]
-        raise ValueError("无法识别已发送文件夹，请在设置中选择")
+        sent = self._sent_options(client, [])["detected"]
+        folders = [{"name": "INBOX", "direction": "inbox"}]
+        if sent is None:
+            progress["sent_unresolved"] = True
+        else:
+            folders.append({"name": sent, "direction": "sent"})
+        return folders
 
     def _read_message(self, client, account_id, fid, validity, mailuid):
         data = imap_call(
@@ -552,19 +653,12 @@ class Sync:
                     self._save(c, progress)
 
     def run(self, account_id):
-        lock = self._lock(account_id)
-        try:
-            lock.acquire()
-        except Timeout as exc:
-            raise Conflict("该邮箱正在拉取，请查看当前进度") from exc
-        try:
+        with self.exclusive(account_id):
             return self._run(account_id)
-        finally:
-            lock.release()
 
     def _run(self, account_id):
         accounts = self.s.rows(
-            "SELECT * FROM mail_accounts WHERE account_id=?", (account_id,)
+            "SELECT * FROM mail_accounts WHERE account_id=? AND host<>''", (account_id,)
         )
         if not accounts:
             raise ValueError("未知邮箱")
@@ -606,7 +700,7 @@ class Sync:
                     if client is None:
                         client = self._connect(account)
                     if folders is None:
-                        folders = self._folders(account, client)
+                        folders = self._folders(account, client, progress)
                         progress["folders"] = {
                             spec["name"]: progress["folders"].get(spec["name"])
                             for spec in folders
@@ -631,7 +725,7 @@ class Sync:
                         self._save(c, progress)
                     time.sleep(self.retry_delays[attempt])
             else:
-                progress["state"] = "partial" if any(failures.values()) else "completed"
+                progress["state"] = "partial" if any(failures.values()) or progress.get("sent_unresolved") else "completed"
         except FolderChanged:
             progress["state"] = "blocked"
         except Exception as exc:

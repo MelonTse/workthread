@@ -2,12 +2,13 @@ name: Windows rc3 upgrade qualification
 on:
   workflow_dispatch:
   push:
-    branches: [codex/rc4-windows-distribution]
+    branches: [codex/rc4-windows-distribution, codex/rc5-mailbox-update]
 permissions:
   contents: read
   actions: read
 jobs:
   qualify:
+    if: github.ref_name != 'codex/rc5-mailbox-update'
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +48,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.13.7'

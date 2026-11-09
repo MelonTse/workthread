@@ -115,7 +115,7 @@ def create_app(store, updates=None):
             "SELECT job_id,job_type,state,error,created_at,updated_at FROM ai_jobs ORDER BY created_at DESC LIMIT 100"
         )
         result["accounts"] = store.rows(
-            "SELECT account_id,label,host,port,username,folders,enabled FROM mail_accounts"
+            "SELECT account_id,label,host,port,username,folders,enabled FROM mail_accounts WHERE host<>''"
         )
         result["health"] = store.health()
         result["imap_interval_minutes"] = store.setting("imap_interval_minutes")
@@ -370,25 +370,61 @@ def create_app(store, updates=None):
         credential = "account:" + aid
         if not p["host"] or not p["username"]:
             raise ValueError("host and username required")
-        with store.db() as c:
-            c.execute(
-                "INSERT INTO mail_accounts VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET label=excluded.label,host=excluded.host,port=excluded.port,username=excluded.username,folders=excluded.folders,enabled=excluded.enabled",
-                (
-                    aid,
-                    p.get("label", "邮箱"),
-                    p["host"],
-                    int(p.get("port", 993)),
-                    p["username"],
-                    credential,
-                    dumps(p.get("folders", [])),
-                    int(p.get("enabled", False)),
-                ),
-            )
-        if p.get("password"):
-            import keyring
+        from .mail import Sync
 
-            keyring.set_password("workthread", credential, p["password"])
+        with Sync(store).exclusive(aid):
+            with store.db() as c:
+                if c.execute(
+                    "SELECT 1 FROM mail_accounts WHERE account_id=? AND host=''", (aid,)
+                ).fetchone():
+                    raise ValueError("该邮箱配置已移除")
+                c.execute(
+                    "INSERT INTO mail_accounts VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET label=excluded.label,host=excluded.host,port=excluded.port,username=excluded.username,folders=excluded.folders,enabled=excluded.enabled",
+                    (
+                        aid,
+                        p.get("label", "邮箱"),
+                        p["host"],
+                        int(p.get("port", 993)),
+                        p["username"],
+                        credential,
+                        dumps(p.get("folders", [])),
+                        int(p.get("enabled", False)),
+                    ),
+                )
+            if p.get("password"):
+                import keyring
+
+                keyring.set_password("workthread", credential, p["password"])
         return jsonify(account_id=aid, saved=True)
+
+    @app.delete("/api/v1/accounts/<aid>")
+    def remove_account(aid):
+        import keyring
+        from .mail import Sync
+
+        if aid == "demo":
+            raise ValueError("合成邮箱不能移除")
+        with Sync(store).exclusive(aid), store.db() as c:
+            row = c.execute(
+                "SELECT credential_ref,host FROM mail_accounts WHERE account_id=?",
+                (aid,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("未知邮箱")
+            if row["host"]:
+                # Keep the identity and address referenced by archived sent mail.
+                # A live configuration always has a nonempty IMAP host.
+                c.execute(
+                    "UPDATE mail_accounts SET host='', credential_ref='', folders='[]', enabled=0 WHERE account_id=?",
+                    (aid,),
+                )
+                c.execute("DELETE FROM settings WHERE key=?", ("mail-sync:" + aid,))
+                if (
+                    keyring.get_password("workthread", row["credential_ref"])
+                    is not None
+                ):
+                    keyring.delete_password("workthread", row["credential_ref"])
+        return jsonify(removed=True)
 
     @app.post("/api/v1/accounts/<aid>/enabled")
     def account_enabled(aid):
@@ -399,7 +435,7 @@ def create_app(store, updates=None):
             raise ValueError("enabled must be boolean")
         with store.db() as c:
             if not c.execute(
-                "SELECT 1 FROM mail_accounts WHERE account_id=?", (aid,)
+                "SELECT 1 FROM mail_accounts WHERE account_id=? AND host<>''", (aid,)
             ).fetchone():
                 raise ValueError("unknown account")
             c.execute(
@@ -414,7 +450,20 @@ def create_app(store, updates=None):
 
         sync = Sync(store)
         return jsonify({a["account_id"]: sync.status(a["account_id"])
-                        for a in store.rows("SELECT account_id FROM mail_accounts")})
+                        for a in store.rows("SELECT account_id FROM mail_accounts WHERE host<>''")})
+
+    @app.post("/api/v1/accounts/<aid>/folders")
+    def account_folders(aid):
+        from .mail import Sync
+
+        payload = request.get_json()
+        if not isinstance(payload, dict) or set(payload) not in (set(), {"sent"}):
+            raise ValueError("无效的文件夹设置")
+        if "sent" in payload and payload["sent"] is not None and not isinstance(payload["sent"], str):
+            raise ValueError("无效的文件夹名称")
+        if aid == "demo":
+            raise ValueError("合成邮箱使用固定的示例文件夹")
+        return jsonify(Sync(store).folder_settings(aid, payload or None))
 
     @app.post("/api/v1/accounts/<aid>/sync")
     def sync(aid):

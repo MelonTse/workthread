@@ -164,3 +164,119 @@ def test_authentication_and_local_write_errors_do_not_reconnect(store, monkeypat
         sync.run("demo")
     assert sync.status("demo")["attempt"] == 0
     assert not store.rows("SELECT * FROM sync_failures")
+
+
+@pytest.mark.parametrize(
+    ("listing", "expected"),
+    [
+        ([((b"\\sEnT",), ".", "外发"), ((), ".", "Sent Items")], "外发"),
+        ([((), "/", "已发送")], "已发送"),
+        ([((), ".", "INBOX.Sent Items")], "INBOX.Sent Items"),
+        ([((), "/", "[Gmail]/已发送邮件")], "[Gmail]/已发送邮件"),
+        ([((), "/", "存档/Sent"), ((b"\\NoSelect", b"\\Sent"), "/", "已发送")], None),
+        ([((), "/", "Sent"), ((), "/", "已发送")], None),
+        ([((b"\\Sent",), "/", "一"), ((b"\\Sent",), "/", "二")], None),
+        ([((), "/", "Outbox")], None),
+    ],
+)
+def test_sent_folder_discovery(listing, expected):
+    fake = FakeIMAP()
+    fake.list_folders = lambda: listing
+    assert Sync._sent_options(fake, [])["detected"] == expected
+
+
+def test_unknown_sent_then_select_on_existing_account(store, monkeypatch):
+    from workthread.core import load
+
+    with store.db() as c:
+        c.execute("UPDATE mail_accounts SET account_id='test'")
+    (before,) = store.rows("SELECT * FROM mail_accounts")
+    fresh = FakeIMAP()
+    fresh.list_folders = lambda: [
+        ((), "/", "INBOX"),
+        ((), "/", "往来/对外"),
+        ((b"\\Noselect",), "/", "往来"),
+    ]
+    monkeypatch.setattr(Sync, "_connect", lambda *_: fresh)
+    http, headers = client(store)
+    route = "/api/v1/accounts/test"
+
+    def post(path, body):
+        return http.post(route + path, json=body, headers=headers)
+
+    result = post("/sync", {}).get_json()
+    assert result["state"] == "partial" and result["sent_unresolved"]
+    assert result["folders"]["INBOX"]["archived"] == 2
+    assert http.get("/api/v1/accounts/sync-status").get_json()["test"][
+        "sent_unresolved"
+    ]
+    options = post("/folders", {}).get_json()
+    assert options == {
+        "names": ["往来/对外"],
+        "detected": None,
+        "automatic": True,
+        "current": None,
+    }
+    assert post("/folders", {"sent": "往来"}).status_code == 400
+    assert post("/folders", {"sent": "INBOX"}).status_code == 400
+    assert post("/folders", {"sent": "往来/对外"}).get_json()["saved"]
+    (after,) = store.rows("SELECT * FROM mail_accounts")
+    assert load(after.pop("folders")) == [
+        {"name": "INBOX", "direction": "inbox"},
+        {"name": "往来/对外", "direction": "sent"},
+    ]
+    before.pop("folders")
+    assert after == before
+    fresh.requests.clear()
+    result = post("/sync", {}).get_json()
+    assert result["state"] == "completed" and "sent_unresolved" not in result
+    assert [n for n, items in fresh.requests if items == ["BODY.PEEK[1]"]] == [3]
+    assert len(store.rows("SELECT * FROM mail_occurrences")) == 3
+    assert post("/folders", {"sent": None}).get_json()["saved"]
+    assert set(post("/sync", {}).get_json()["folders"]) == {"INBOX"}
+    assert len(store.rows("SELECT * FROM mail_occurrences")) == 3
+
+
+def test_remove_mail_account_retains_archive_and_is_retryable(store, monkeypatch):
+    import keyring
+
+    with store.db() as c:
+        c.execute("UPDATE mail_accounts SET account_id='test',enabled=1")
+    Sync(store, lambda _: FakeIMAP()).run("test")
+    tables = (
+        "messages",
+        "mail_occurrences",
+        "mail_folders",
+        "archive_commits",
+        "sync_runs",
+    )
+    original = {t: store.rows("SELECT * FROM " + t) for t in tables}
+    http, headers = client(store)
+    secrets = {"synthetic": "fake"}
+    monkeypatch.setattr(keyring, "get_password", lambda _, ref: secrets.get(ref))
+
+    def fail(*_):
+        raise keyring.errors.KeyringError("synthetic")
+
+    monkeypatch.setattr(keyring, "delete_password", fail)
+    route = "/api/v1/accounts/test"
+    with Sync(store).exclusive("test"):
+        assert http.delete(route, headers=headers).status_code == 409
+    assert http.delete(route, headers=headers).status_code == 500
+    assert store.rows("SELECT host,enabled FROM mail_accounts") == [
+        {"host": "imap.example.org", "enabled": 1}
+    ]
+    monkeypatch.setattr(keyring, "delete_password", lambda _, ref: secrets.pop(ref))
+    assert http.delete(route, headers=headers).get_json()["removed"]
+    assert not secrets
+    assert http.delete(route, headers=headers).get_json()["removed"]
+    assert not http.get("/api/v1/snapshot").get_json()["accounts"]
+    assert not http.get("/api/v1/accounts/sync-status").get_json()
+    assert (
+        http.post(
+            route + "/enabled", headers=headers, json={"enabled": True}
+        ).status_code
+        == 400
+    )
+    assert http.post(route + "/sync", headers=headers).status_code == 400
+    assert {t: store.rows("SELECT * FROM " + t) for t in tables} == original

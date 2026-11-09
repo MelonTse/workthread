@@ -11,6 +11,7 @@ import zipfile
 
 import pytest
 import workthread.deployment as deployment
+from workthread import __version__
 from workthread.core import Store
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,10 +95,10 @@ def test_actual_packaging_script_preserves_hidden_skill_bytes(tmp_path, monkeypa
         Path(next(arg[5:] for arg in args if arg.startswith("/out:"))).write_bytes(b"synthetic launcher")
     monkeypatch.setattr("subprocess.run", compile_stub)
     runpy.run_path(str(source / "scripts/package_release.py"), run_name="__main__")
-    archive = source / "artifacts/WorkThread-1.0.0rc4-windows-x64.zip"
+    archive = source / f"artifacts/WorkThread-{__version__}-windows-x64.zip"
     with zipfile.ZipFile(archive) as z:
         assert z.testzip() is None
-        prefix = "WorkThread-1.0.0rc4-windows-x64/"
+        prefix = archive.stem + "/"
         manifest = json.loads(z.read(prefix + "SHA256SUMS.json"))
         for path, expected in manifest.items():
             assert hashlib.sha256(z.read(prefix + path)).hexdigest() == expected

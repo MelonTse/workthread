@@ -55,7 +55,7 @@ def main():
     if os.name != "nt":
         raise SystemExit("Native Windows required")
     with tempfile.TemporaryDirectory(prefix="wt-qualification-") as directory:
-        tmp = Path(directory)
+        tmp = Path(directory).resolve()  # Normalize Windows 8.3 temp paths for process matching.
         source = tmp / "source"
         archive = tmp / "source.zip"
         run(["git", "archive", "--format=zip", "-o", str(archive), "HEAD"], cwd=ROOT)
@@ -203,10 +203,16 @@ def main():
             # Select only executables in this newly-created disposable installation.
             run(
                 [
-                    "powershell.exe",
+                    "pwsh",
                     "-NoProfile",
                     "-Command",
-                    "Get-CimInstance Win32_Process -Filter \"Name='WorkThread.exe'\" | Where-Object {$_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:WT_QA_ROOT,[StringComparison]::OrdinalIgnoreCase)} | ForEach-Object {Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue}",
+                    "$ErrorActionPreference = 'Stop'; "
+                    "$owned = Get-Process -Name WorkThread -ErrorAction SilentlyContinue | "
+                    "Where-Object { $_.Path -and $_.Path.StartsWith("
+                    "$env:WT_QA_ROOT, [StringComparison]::OrdinalIgnoreCase) }; "
+                    "foreach ($p in $owned) { "
+                    "if (!$p.HasExited) { $p.Kill() }; "
+                    "if (!$p.WaitForExit(30000)) { throw 'Test process still running' } }",
                 ],
                 env=dict(os.environ, WT_QA_ROOT=str(target) + os.sep),
             )

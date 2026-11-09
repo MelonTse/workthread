@@ -408,6 +408,14 @@ def create_app(store, updates=None):
             )
         return jsonify(enabled=enabled)
 
+    @app.get("/api/v1/accounts/sync-status")
+    def mail_sync_status():
+        from .mail import Sync
+
+        sync = Sync(store)
+        return jsonify({a["account_id"]: sync.status(a["account_id"])
+                        for a in store.rows("SELECT account_id FROM mail_accounts")})
+
     @app.post("/api/v1/accounts/<aid>/sync")
     def sync(aid):
         from .mail import Sync

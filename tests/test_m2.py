@@ -39,18 +39,22 @@ def test_incremental_no_attachment_and_thread(tmp_path):
     assert "demo.pdf" in meta and "Demo Team" in meta
 
 
-def test_failure_uid_retried_and_reset_deduplicated(tmp_path):
+def test_failed_connection_resumes_and_changed_uidvalidity_blocks_fetch(tmp_path):
     s = Store(tmp_path)
     account(s)
     fake = FakeIMAP()
     fake.fail_uid = 2
     sync = Sync(s, lambda a: fake)
-    assert sync.run("demo")["errors"]
+    sync.retry_delays = ()
+    assert sync.run("demo")["state"] == "interrupted"
+    assert not s.rows("SELECT * FROM sync_failures")
     fake.fail_uid = None
     sync.run("demo")
     assert len(s.rows("SELECT * FROM messages")) == 3
     fake.validity = 101
-    sync.run("demo")
+    requests = len(fake.requests)
+    assert sync.run("demo")["state"] == "blocked"
+    assert len(fake.requests) == requests
     assert len(s.rows("SELECT * FROM messages")) == 3
     assert not s.rows("SELECT * FROM sync_failures")
 

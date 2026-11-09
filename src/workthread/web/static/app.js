@@ -963,7 +963,7 @@ function openKnowledgeEditor(item = null) {
 }
 
 const settingsState = {
-  tab: 'runtime'
+  tab: sessionStorage.getItem('workthread-settings-tab') === 'accounts' ? 'accounts' : 'runtime'
 };
 async function showSoftwareUpdate() {
   const status = $('#update-status'), actions = $('#update-actions');
@@ -1017,11 +1017,56 @@ async function showSoftwareUpdate() {
 const runStates = {
   pending: '待执行',
   running: '运行中',
+  interrupted: '已中断',
+  blocked: '文件夹标识已变化',
   completed: '已完成',
   failed: '失败',
   partial: '部分完成',
   superseded: '已过期'
 };
+
+const syncLabels = {
+  idle: ['尚未拉取', '开始拉取'],
+  running: ['正在拉取', '正在拉取…'],
+  reconnecting: ['连接中断', '正在重连…'],
+  interrupted: ['拉取已中断', '继续拉取（断点续传）'],
+  blocked: ['文件夹标识已变化，旧断点已停用。请核对邮箱文件夹设置。', '续传已停用'],
+  completed: ['本轮拉取完成', '检查新邮件'],
+  partial: ['本轮结束，有邮件异常', '再次拉取'],
+  failed: ['拉取失败，请检查邮箱配置和本机运行状态', '重新拉取']
+};
+let syncPollPending = false;
+const submittedSyncs = new Set();
+async function refreshMailProgress() {
+  if (view !== 'settings' || settingsState.tab !== 'accounts' || syncPollPending) return;
+  syncPollPending = true;
+  try {
+    const statuses = await api('/accounts/sync-status');
+    for (const button of document.querySelectorAll('[data-sync]')) {
+      const id = button.dataset.sync, status = statuses[id];
+      if (!status) continue;
+      const [label, action] = syncLabels[status.state] || syncLabels.failed;
+      const lines = [label];
+      if (status.state === 'reconnecting') lines[0] += '，第 ' + status.attempt + ' 次自动重连';
+      if (status.folder && ['running','interrupted','reconnecting','blocked'].includes(status.state)) {
+        lines[0] += ' · ' + status.folder;
+      }
+      for (const [name, counts] of Object.entries(status.folders || {})) {
+        if (!counts) { lines.push(name + ' · 尚未取得邮件清单'); continue; }
+        const pending = counts.total - counts.archived - counts.errors;
+        lines.push(name + ' · 已归档 ' + counts.archived + ' / ' + counts.total +
+          ' · 待拉取 ' + pending + ' · 异常 ' + counts.errors);
+      }
+      const target = button.closest('.account-row').querySelector('[data-mail-progress]');
+      const message = lines.join('\n');
+      if (target.textContent !== message) target.textContent = message;
+      button.textContent = action;
+      button.disabled = submittedSyncs.has(id) || ['running','reconnecting','blocked'].includes(status.state);
+    }
+  } finally {
+    syncPollPending = false;
+  }
+}
 
 function settingsView() {
   $('#workspace-content').innerHTML = `${tabBar([['runtime','运行与 AI'],['accounts','邮箱'],['backup','备份与恢复'],['update','软件更新']],settingsState.tab,'settings-tab','设置分类')}
@@ -1032,7 +1077,7 @@ function settingsView() {
       <details class="card related-objects"><summary>运行信息与同步记录</summary><div class="card-body"><p class="prewrap">${E(data.health.workspace)}</p><div class="small muted">Windows / 真实邮箱 / WorkBuddy 无人值守：待验收</div>${data.sync_runs.slice(-5).map(r=>`<div class="compact-row"><time>${E(date(r.started_at))}</time>${badge('',runStates[r.state]||r.state)}</div>`).join('')||'<p>暂无同步记录</p>'}</div></details>
     </section>
     <section data-settings-panel="accounts" ${settingsState.tab==='accounts'?'':'hidden'}>
-      ${card('邮箱',data.accounts.map(a=>`<div class="account-row"><div><strong>${E(a.label)}</strong><p>${E(a.username)} · ${a.enabled?'同步已启用':'同步已暂停'}</p></div><div class="button-row"><button data-sync="${E(a.account_id)}">同步</button>${a.account_id!=='demo'?`<button data-account-toggle="${E(a.account_id)}">${a.enabled?'暂停':'启用'}同步</button>`:''}</div></div>`).join('')||'<div class="empty">暂无邮箱</div>')}
+      ${card('邮箱',data.accounts.map(a=>`<div class="account-row"><div><strong>${E(a.label)}</strong><p>${E(a.username)} · ${a.enabled?'同步已启用':'同步已暂停'}</p><div class="small muted prewrap" role="status" data-mail-progress></div></div><div class="button-row"><button data-sync="${E(a.account_id)}" disabled>读取状态…</button>${a.account_id!=='demo'?`<button data-account-toggle="${E(a.account_id)}">${a.enabled?'暂停':'启用'}同步</button>`:''}</div></div>`).join('')||'<div class="empty">暂无邮箱</div>')}
       <details class="card related-objects" id="account-editor"><summary>添加邮箱</summary>
       <form id="account-form" class="card-body form-grid compact-form"><label>名称<input name="label" required></label><label>账号<input name="username" required autocomplete="off"></label><label>IMAP 主机<input name="host" placeholder="imap.example.org" required></label><label>TLS 端口<input name="port" type="number" value="993"></label><label class="wide">授权码<input name="password" type="password" autocomplete="new-password"></label>
       <details class="wide advanced-fields"><summary>文件夹设置</summary><div class="form-grid"><label>收件箱<input name="inbox_folder" placeholder="INBOX"></label><label>已发送<input name="sent_folder" placeholder="自动识别"></label><label class="wide">其他文件夹<input name="extra_folders" placeholder="逗号分隔"></label></div></details>
@@ -1047,11 +1092,14 @@ function settingsView() {
     </section>`;
   bindTabs('[data-settings-tab]', key => {
     settingsState.tab = key;
+    sessionStorage.setItem('workthread-settings-tab', key);
+    if (key === 'accounts') attempt(refreshMailProgress)();
     if (key === 'update') attempt(showSoftwareUpdate)();
     markTabs('[data-settings-tab]', key);
     document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset
       .settingsPanel !== key)
   });
+  if (settingsState.tab === 'accounts') attempt(refreshMailProgress)();
   if (settingsState.tab === 'update') attempt(showSoftwareUpdate)();
   $('#health-check').onclick = attempt(async () => {
     const h = await api('/system/status');
@@ -1102,10 +1150,18 @@ function settingsView() {
     await refresh()
   });
   document.querySelectorAll('[data-sync]').forEach(el => el.onclick = attempt(async () => {
-    if (el.dataset.sync !== 'demo' && !confirm('现在连接此邮箱并同步？')) return;
-    await api('/accounts/' + el.dataset.sync + '/sync', 'POST', {});
-    toast('同步已完成');
-    await refresh()
+    const id = el.dataset.sync;
+    if (id !== 'demo' && !confirm('现在连接此邮箱并拉取尚未归档的邮件？')) return;
+    el.disabled = true;
+    submittedSyncs.add(id);
+    try {
+      const result = await api('/accounts/' + encodeURIComponent(id) + '/sync', 'POST', {});
+      toast(syncLabels[result.state][0]);
+      await refresh();
+    } finally {
+      submittedSyncs.delete(id);
+      await refreshMailProgress();
+    }
   }));
   document.querySelectorAll('[data-account-toggle]').forEach(el => el.onclick = attempt(async () => {
     const a = data.accounts.find(x => x.account_id === el.dataset.accountToggle);
@@ -1216,3 +1272,5 @@ attempt(refresh)();
 setInterval(() => {
   if (!$('#detail-dialog').open && view === 'overview') attempt(refresh)()
 }, 15000);
+
+setInterval(() => { if (!document.hidden) attempt(refreshMailProgress)() }, 2000);

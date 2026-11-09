@@ -1,17 +1,22 @@
 """IMAP section-only fetch, append-only archive journal, and searchable index."""
 
 import base64
+import contextlib
 import datetime as dt
 import email
 from email import policy
+from email.errors import MessageError
 from email.utils import getaddresses, parsedate_to_datetime
 import html
+import imaplib
 import json
 import os
 import quopri
 import re
 import ssl
-from .core import uid, now, dumps, digest, load
+import time
+from filelock import FileLock, Timeout
+from .core import Conflict, uid, now, dumps, digest, load
 
 
 class UnsafeMime(ValueError):
@@ -345,156 +350,311 @@ class Archive:
             return self._finish(c, tx, p)
 
 
+class SessionLost(Exception):
+    """Transient failure of an IMAP operation (never a local archive write)."""
+
+
+class FolderChanged(ValueError):
+    pass
+
+
+def imap_call(operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except ssl.SSLCertVerificationError:
+        raise
+    except (imaplib.IMAP4.abort, EOFError, OSError) as exc:
+        raise SessionLost from exc
+    except imaplib.IMAP4.error as exc:
+        # IMAPClient wraps a login-time abort in LoginError.
+        if isinstance(exc.__context__, imaplib.IMAP4.abort):
+            raise SessionLost from exc
+        raise
+
+
 class Sync:
+    retry_delays = (1, 3, 8)
+
     def __init__(self, store, client_factory=None):
         self.s = store
         self.archive = Archive(store)
         self.client_factory = client_factory
 
-    def run(self, account_id):
-        a = self.s.rows(
-            "SELECT * FROM mail_accounts WHERE account_id=?", (account_id,)
-        )[0]
-        if self.client_factory:
-            client = self.client_factory(a)
-        else:
-            import keyring
-            from imapclient import IMAPClient
+    def _lock(self, account_id):
+        return FileLock(
+            self.s.root / (".mail-sync-" + digest(account_id) + ".lock"), timeout=0
+        )
 
-            password = keyring.get_password("workthread", a["credential_ref"])
-            if not password:
-                raise ValueError("请在本机凭证库重新授权邮箱")
-            client = IMAPClient(
-                a["host"],
-                port=a["port"],
-                ssl=True,
-                ssl_context=ssl.create_default_context(),
-                timeout=30,
+    def status(self, account_id):
+        status = self.s.setting("mail-sync:" + account_id)
+        if status is None:
+            history = self.s.rows(
+                "SELECT state FROM sync_runs WHERE account_id=? ORDER BY rowid DESC LIMIT 1",
+                (account_id,),
             )
-            client.login(a["username"], password)
-        run = uid()
-        with self.s.db() as c:
-            c.execute(
-                "INSERT INTO sync_runs VALUES (?,?,?,?,?,?)",
-                (run, account_id, now(), None, "running", None),
-            )
-        errors = []
+            state = history[0]["state"] if history else "idle"
+            return {
+                "state": "interrupted" if state == "running" else state,
+                "folders": {},
+            }
+        if status["state"] in ("running", "reconnecting"):
+            try:
+                with self._lock(account_id):
+                    # No owning process remains after an unclean exit.
+                    status = self.s.setting("mail-sync:" + account_id) or status
+                    if status["state"] in ("running", "reconnecting"):
+                        status["state"] = "interrupted"
+            except Timeout:
+                pass
+        return status
+
+    def _connect(self, account):
+        if self.client_factory:
+            return imap_call(self.client_factory, account)
+        import keyring
+        from imapclient import IMAPClient
+
+        password = keyring.get_password("workthread", account["credential_ref"])
+        if not password:
+            raise ValueError("请在本机凭证库重新授权邮箱")
+        client = imap_call(
+            IMAPClient,
+            account["host"],
+            port=account["port"],
+            ssl=True,
+            ssl_context=ssl.create_default_context(),
+            timeout=30,
+        )
         try:
-            self.archive.recover()
-            folders = load(a["folders"], [])
-            if not folders:
-                listed = client.list_folders()
-                sent = [
-                    n
-                    for flags, sep, n in listed
-                    if b"\\Sent" in flags or "\\Sent" in flags
-                ]
-                if not sent:
-                    raise ValueError("无法识别已发送文件夹，请在设置中选择")
-                folders = [
+            imap_call(client.login, account["username"], password)
+        except Exception:
+            with contextlib.suppress(Exception):
+                client.shutdown()
+            raise
+        return client
+
+    def _folders(self, account, client):
+        configured = load(account["folders"], [])
+        if configured:
+            return configured
+        for flags, _, name in imap_call(client.list_folders):
+            if b"\\Sent" in flags or "\\Sent" in flags:
+                return [
                     {"name": "INBOX", "direction": "inbox"},
-                    {"name": sent[0], "direction": "sent"},
+                    {"name": name, "direction": "sent"},
                 ]
-            for spec in folders:
-                info = client.select_folder(spec["name"], readonly=True)
-                validity = int(info[b"UIDVALIDITY"])
-                old = self.s.rows(
-                    "SELECT * FROM mail_folders WHERE account_id=? AND name=?",
-                    (account_id, spec["name"]),
+        raise ValueError("无法识别已发送文件夹，请在设置中选择")
+
+    def _read_message(self, client, account_id, fid, validity, mailuid):
+        data = imap_call(
+            client.fetch,
+            [mailuid],
+            [
+                "BODY.PEEK[HEADER]",
+                "BODYSTRUCTURE",
+                "INTERNALDATE",
+                "FLAGS",
+            ],
+        )[mailuid]
+        leaves, attachments = body_parts(data[b"BODYSTRUCTURE"])
+        decoded = []
+        if not leaves:
+            raise UnsafeMime("no permitted body; inspect MIME structure manually")
+        for leaf in leaves:
+            request = "BODY.PEEK[" + leaf["section"] + "]"
+            response = imap_call(client.fetch, [mailuid], [request])[mailuid]
+            raw = response.get(("BODY[" + leaf["section"] + "]").encode())
+            if not isinstance(raw, bytes):
+                raise UnsafeMime("missing requested body section")
+            decoded.append(
+                {
+                    **leaf,
+                    "content": decode_part(raw, leaf),
+                    "wire_base64": base64.b64encode(raw).decode("ascii"),
+                }
+            )
+        origin = {
+            "account_id": account_id,
+            "folder_id": fid,
+            "uidvalidity": validity,
+            "imap_uid": mailuid,
+            "flags": [text(f) for f in data.get(b"FLAGS", [])],
+        }
+        self.archive.record(
+            data[b"BODY[HEADER]"],
+            decoded,
+            attachments,
+            origin,
+            data[b"INTERNALDATE"],
+        )
+
+    def _save(self, c, progress):
+        c.execute(
+            "INSERT OR REPLACE INTO settings VALUES (?,?)",
+            ("mail-sync:" + progress["account_id"], dumps(progress)),
+        )
+
+    def _folder(self, client, spec, progress, failures):
+        name = spec["name"]
+        account_id = progress["account_id"]
+        info = imap_call(client.select_folder, name, readonly=True)
+        validity = int(info[b"UIDVALIDITY"])
+        with self.s.db() as c:
+            folder = c.execute(
+                "SELECT folder_id,uidvalidity FROM mail_folders WHERE account_id=? AND name=?",
+                (account_id, name),
+            ).fetchone()
+            if folder and folder["uidvalidity"] != validity:
+                raise FolderChanged(name)
+            fid = folder["folder_id"] if folder else uid()
+            if not folder:
+                c.execute(
+                    "INSERT INTO mail_folders VALUES (?,?,?,?,?,0)",
+                    (fid, account_id, name, spec["direction"], validity),
                 )
-                fid = old[0]["folder_id"] if old else uid()
+        uids = set(imap_call(client.search, ["ALL"]))
+        archived = {
+            r["imap_uid"]
+            for r in self.s.rows(
+                "SELECT imap_uid FROM mail_occurrences WHERE folder_id=? AND uidvalidity=?",
+                (fid, validity),
+            )
+        }
+        counts = {
+            "total": len(uids),
+            "archived": len(uids & archived),
+            "errors": len(uids & failures.keys()),
+        }
+        progress["folders"][name] = counts
+        progress["state"] = "running"
+        with self.s.db() as c:
+            self._save(c, progress)
+        for mailuid in sorted(uids - archived - failures.keys()):
+            try:
+                self._read_message(client, account_id, fid, validity, mailuid)
+            except (ValueError, LookupError, MessageError) as exc:
+                error = type(exc).__name__
+                failures[mailuid] = error
+                counts["errors"] += 1
                 with self.s.db() as c:
                     c.execute(
-                        "INSERT INTO mail_folders VALUES (?,?,?,?,?,?) ON CONFLICT(account_id,name) DO UPDATE SET uidvalidity=excluded.uidvalidity,direction=excluded.direction",
-                        (fid, account_id, spec["name"], spec["direction"], validity, 0),
+                        "INSERT OR REPLACE INTO sync_failures VALUES (?,?,?,?)",
+                        (fid, validity, mailuid, error),
                     )
-                existing = {
-                    r["imap_uid"]
-                    for r in self.s.rows(
-                        "SELECT imap_uid FROM mail_occurrences WHERE folder_id=? AND uidvalidity=?",
-                        (fid, validity),
+                    self._save(c, progress)
+            else:
+                counts["archived"] += 1
+                with self.s.db() as c:
+                    c.execute(
+                        "UPDATE mail_folders SET high_uid=max(high_uid,?) WHERE folder_id=?",
+                        (mailuid, fid),
                     )
-                }
-                # Enumerate UIDs, never re-fetch archived body sections in normal incremental sync.
-                for mailuid in client.search(["ALL"]):
-                    if mailuid in existing:
-                        continue
-                    try:
-                        data = client.fetch(
-                            [mailuid],
-                            [
-                                "BODY.PEEK[HEADER]",
-                                "BODYSTRUCTURE",
-                                "INTERNALDATE",
-                                "FLAGS",
-                            ],
-                        )[mailuid]
-                        leaves, attachments = body_parts(data[b"BODYSTRUCTURE"])
-                        decoded = []
-                        if not leaves:
-                            raise UnsafeMime(
-                                "no permitted body; inspect MIME structure manually"
-                            )
-                        for leaf in leaves:
-                            request = "BODY.PEEK[" + leaf["section"] + "]"
-                            response = client.fetch([mailuid], [request])[mailuid]
-                            raw = response.get(
-                                ("BODY[" + leaf["section"] + "]").encode()
-                            )
-                            if not isinstance(raw, bytes):
-                                raise UnsafeMime("missing requested body section")
-                            decoded.append(
-                                {
-                                    **leaf,
-                                    "content": decode_part(raw, leaf),
-                                    "wire_base64": base64.b64encode(raw).decode(
-                                        "ascii"
-                                    ),
-                                }
-                            )
-                        origin = {
-                            "account_id": account_id,
-                            "folder_id": fid,
-                            "uidvalidity": validity,
-                            "imap_uid": mailuid,
-                            "flags": [text(f) for f in data.get(b"FLAGS", [])],
+                    self._save(c, progress)
+
+    def run(self, account_id):
+        lock = self._lock(account_id)
+        try:
+            lock.acquire()
+        except Timeout as exc:
+            raise Conflict("该邮箱正在拉取，请查看当前进度") from exc
+        try:
+            return self._run(account_id)
+        finally:
+            lock.release()
+
+    def _run(self, account_id):
+        accounts = self.s.rows(
+            "SELECT * FROM mail_accounts WHERE account_id=?", (account_id,)
+        )
+        if not accounts:
+            raise ValueError("未知邮箱")
+        account = accounts[0]
+        previous = self.s.setting("mail-sync:" + account_id) or {}
+        resuming = previous.get("state") in (
+            "running",
+            "reconnecting",
+            "interrupted",
+            "blocked",
+            "failed",
+        )
+        progress = {
+            "account_id": account_id,
+            "run_id": uid(),
+            "state": "running",
+            "attempt": 0,
+            "folder": "",
+            "folders": previous.get("folders", {}) if resuming else {},
+        }
+        with self.s.db() as c:
+            c.execute(
+                "UPDATE sync_runs SET state='interrupted',finished_at=? WHERE account_id=? AND state='running'",
+                (now(), account_id),
+            )
+            c.execute(
+                "INSERT INTO sync_runs VALUES (?,?,?,?,?,?)",
+                (progress["run_id"], account_id, now(), None, "running", None),
+            )
+            self._save(c, progress)
+        client = None
+        folders = None
+        index = 0
+        failures = {}
+        try:
+            self.archive.recover()
+            while folders is None or index < len(folders):
+                try:
+                    if client is None:
+                        client = self._connect(account)
+                    if folders is None:
+                        folders = self._folders(account, client)
+                        progress["folders"] = {
+                            spec["name"]: progress["folders"].get(spec["name"])
+                            for spec in folders
                         }
-                        self.archive.record(
-                            data[b"BODY[HEADER]"],
-                            decoded,
-                            attachments,
-                            origin,
-                            data[b"INTERNALDATE"],
-                        )
-                        with self.s.db() as c:
-                            c.execute(
-                                "UPDATE mail_folders SET high_uid=max(high_uid,?) WHERE folder_id=?",
-                                (mailuid, fid),
-                            )
-                    except Exception as e:
-                        # Errors deliberately omit server responses, credentials and message content.
-                        error = type(e).__name__
-                        errors.append({"uid": mailuid, "error": error})
-                        with self.s.db() as c:
-                            c.execute(
-                                "INSERT OR REPLACE INTO sync_failures VALUES (?,?,?,?)",
-                                (fid, validity, mailuid, error),
-                            )
-            with self.s.db() as c:
-                c.execute(
-                    "UPDATE sync_runs SET finished_at=?,state=?,error=? WHERE run_id=?",
-                    (now(), "partial" if errors else "completed", dumps(errors), run),
-                )
-        except Exception as e:
-            with self.s.db() as c:
-                c.execute(
-                    "UPDATE sync_runs SET finished_at=?,state=?,error=? WHERE run_id=?",
-                    (now(), "failed", type(e).__name__, run),
-                )
+                    spec = folders[index]
+                    progress["folder"] = spec["name"]
+                    self._folder(
+                        client, spec, progress, failures.setdefault(spec["name"], {})
+                    )
+                    index += 1
+                except SessionLost:
+                    if client is not None:
+                        with contextlib.suppress(Exception):
+                            client.shutdown()
+                        client = None
+                    attempt = progress["attempt"]
+                    if attempt == len(self.retry_delays):
+                        progress["state"] = "interrupted"
+                        break
+                    progress.update(state="reconnecting", attempt=attempt + 1)
+                    with self.s.db() as c:
+                        self._save(c, progress)
+                    time.sleep(self.retry_delays[attempt])
+            else:
+                progress["state"] = "partial" if any(failures.values()) else "completed"
+        except FolderChanged:
+            progress["state"] = "blocked"
+        except Exception as exc:
+            progress.update(state="failed", error=type(exc).__name__)
             raise
         finally:
-            try:
-                client.logout()
-            except Exception:
-                pass
-        return {"run_id": run, "errors": errors}
+            errors = [
+                {"folder": name, "uid": n, "error": reason}
+                for name, items in failures.items()
+                for n, reason in items.items()
+            ]
+            with self.s.db() as c:
+                self._save(c, progress)
+                c.execute(
+                    "UPDATE sync_runs SET finished_at=?,state=?,error=? WHERE run_id=?",
+                    (
+                        now(),
+                        progress["state"],
+                        progress.get("error") or dumps(errors),
+                        progress["run_id"],
+                    ),
+                )
+            if client is not None:
+                with contextlib.suppress(Exception):
+                    client.logout()
+        return {**progress, "errors": errors}

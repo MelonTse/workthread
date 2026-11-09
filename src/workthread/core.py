@@ -136,6 +136,11 @@ class Store:
         self.lock = FileLock(
             str(self.root / ".workspace.lock"), timeout=30, is_singleton=True
         )
+        # Readers may overlap normal WAL writes. A full restore moves the data
+        # directory, so it must wait for read handles to close on Windows.
+        self.read_lock = FileLock(
+            str(self.root / ".workspace-read.lock"), timeout=30, is_singleton=True
+        )
         self.archive_seen = {}
         self.data = self.root / "data"
         self.data.mkdir(parents=True, exist_ok=True)
@@ -201,8 +206,17 @@ class Store:
             finally:
                 c.close()
 
+    @contextlib.contextmanager
+    def read_db(self):
+        with self.read_lock, contextlib.closing(
+            sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=5)
+        ) as c:
+            c.row_factory = sqlite3.Row
+            c.execute("BEGIN")
+            yield c
+
     def rows(self, sql, args=()):
-        with self.db() as c:
+        with self.read_db() as c:
             return [dict(r) for r in c.execute(sql, args)]
 
     def setting(self, key):

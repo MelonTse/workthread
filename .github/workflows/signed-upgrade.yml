@@ -1,0 +1,45 @@
+name: Official Windows direct update
+on:
+  push:
+    branches:
+      - 'codex/rc6-signed-check*'
+      - 'codex/rc6-public-check*'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ['1.0.0rc4', '1.0.0rc5']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - run: uv sync --frozen --python 3.13
+      - name: Verify signed candidate with the original Windows updater
+        if: startsWith(github.ref_name, 'codex/rc6-signed-check')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $build = Get-Content qualification/source.json -Raw | ConvertFrom-Json
+          gh run download $build.run --name WorkThread-windows-candidate --dir artifacts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $zip = (Get-ChildItem artifacts/WorkThread-*-windows-x64.zip).FullName
+          uv run --frozen python scripts/qualify_release_update.py --from-version "${{ matrix.source }}" --candidate $zip --metadata qualification --commit $build.commit
+      - name: Check public release through the original Windows web UI
+        if: startsWith(github.ref_name, 'codex/rc6-public-check')
+        shell: pwsh
+        run: |
+          $deps = Join-Path $env:RUNNER_TEMP 'browser'
+          npm install --prefix $deps --ignore-scripts --no-audit --no-fund playwright-core@1.56.1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:WT_QA_PLAYWRIGHT = Join-Path $deps 'node_modules/playwright-core'
+          $env:WT_QA_CHROME = Join-Path $env:ProgramFiles 'Google/Chrome/Application/chrome.exe'
+          uv run --frozen python scripts/qualify_release_update.py --from-version "${{ matrix.source }}" --commit $env:GITHUB_SHA

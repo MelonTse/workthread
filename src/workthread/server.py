@@ -107,20 +107,40 @@ def create_app(store, updates=None):
             "analyses",
             "sync_runs",
         ]
-        result = {table: store.rows("SELECT * FROM " + table) for table in tables}
-        result["messages"] = store.rows(
-            "SELECT message_id,subject,date,sender,recipients,in_reply_to,body_text FROM messages ORDER BY internal_date DESC LIMIT 500"
+        compact = request.args.get("summary") == "1"
+        with store.read_db() as c:
+            def rows(sql):
+                return [dict(row) for row in c.execute(sql)]
+
+            result = {}
+            for table in tables:
+                if compact and table == "analyses":
+                    result[table] = rows("SELECT summary,advice FROM analyses ORDER BY rowid DESC LIMIT 1")
+                elif compact and table == "drafts":
+                    result[table] = rows("SELECT draft_id,message_id,subject FROM drafts")
+                elif compact and table == "sync_runs":
+                    result[table] = rows("SELECT started_at,state FROM sync_runs ORDER BY rowid DESC LIMIT 5")[::-1]
+                else:
+                    result[table] = rows("SELECT * FROM " + table)
+            body = "substr(body_text,1,100) AS preview" if compact else "body_text"
+            result["messages"] = rows(
+                f"SELECT message_id,subject,date,sender,recipients,in_reply_to,{body} FROM messages "
+                "WHERE rowid IN (SELECT rowid FROM messages ORDER BY internal_date DESC,rowid DESC LIMIT 500) "
+                "ORDER BY internal_date DESC,rowid DESC"
+            )
+            result["jobs"] = rows(
+                "SELECT job_id,job_type,state,error,created_at,updated_at FROM ai_jobs ORDER BY created_at DESC LIMIT 100"
+            )
+            result["accounts"] = rows(
+                "SELECT account_id,label,host,port,username,folders,enabled FROM mail_accounts WHERE host<>''"
+            )
+            for key in ("imap_interval_minutes", "timezone", "profile", "ai_schedule"):
+                result[key] = load(c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()[0])
+        schedule = result.pop("ai_schedule")
+        result["health"] = (
+            {"workspace": str(store.root), "ai_schedule": schedule}
+            if compact else store.health()
         )
-        result["jobs"] = store.rows(
-            "SELECT job_id,job_type,state,error,created_at,updated_at FROM ai_jobs ORDER BY created_at DESC LIMIT 100"
-        )
-        result["accounts"] = store.rows(
-            "SELECT account_id,label,host,port,username,folders,enabled FROM mail_accounts WHERE host<>''"
-        )
-        result["health"] = store.health()
-        result["imap_interval_minutes"] = store.setting("imap_interval_minutes")
-        result["timezone"] = store.setting("timezone")
-        result["profile"] = store.setting("profile")
         return jsonify(result)
 
     @app.get("/api/v1/system/status")
@@ -178,7 +198,7 @@ def create_app(store, updates=None):
 
     @app.get("/api/v1/mail/<mid>")
     def mail_detail(mid):
-        with store.db() as c:
+        with store.read_db() as c:
             message = c.execute(
                 "SELECT * FROM messages WHERE message_id=?", (mid,)
             ).fetchone()

@@ -14,6 +14,31 @@ const check = (name, value) => {assert.ok(value, name);results.push(name);};
  const p = await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true});
  p.on('pageerror',e=>errors.push(e.message));
  p.on('console',m=>{if(m.type()==='error' && !m.text().includes('409 (CONFLICT)')) errors.push(m.text());});
+ // A failed initial snapshot used to leave every navigation target blank.
+ const cold = await browser.newPage();
+ const renderErrors = [];
+ cold.on('pageerror', error => renderErrors.push(error.message));
+ const snapshotRoute = '**/api/v1/snapshot?summary=1';
+ const failSnapshot = route => route.fulfill({status:503,
+   contentType:'application/json',body:JSON.stringify({error:'合成读取超时'})});
+ await cold.route(snapshotRoute, failSnapshot);
+ await cold.goto(url);
+ await cold.waitForSelector('#retry-load:visible');
+ for (const view of ['mail','knowledge','todos','settings']) {
+   await cold.locator('nav [data-view='+view+']').click();
+   check('cold read failure offers retry on '+view,await cold.locator('#retry-load').isVisible());
+ }
+ await cold.waitForSelector('#update-status:text("当前版本")');
+ await cold.unroute(snapshotRoute);
+ await cold.locator('#retry-load').click();
+ await cold.waitForSelector('#health-check:visible');
+ check('can recover initial load without a browser refresh',!renderErrors.length);
+ await cold.route(snapshotRoute, failSnapshot);
+ await cold.locator('#queue-ai').click(); // Settings' refresh action
+ await cold.getByText('刷新失败，当前显示上次读取的数据。',{exact:false}).waitFor();
+ await cold.locator('nav [data-view=todos]').click();
+ check('last successful snapshot remains navigable during a failed refresh',await cold.locator('.todo-row').first().isVisible());
+ await cold.close();
  await p.goto(url);
  await p.waitForSelector('.todo-row');
  async function api(route,method='GET',body) {

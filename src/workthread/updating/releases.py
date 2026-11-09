@@ -2,12 +2,16 @@
 
 import base64
 import hashlib
+import http.client
 import json
 import ntpath
 import os
 import re
 import shutil
+import socket
+import ssl
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -114,16 +118,55 @@ def fetch(url, limit, out=None):
     req = urllib.request.Request(
         url, headers={"User-Agent": "WorkThread-local-updater"}
     )
-    with urllib.request.urlopen(req, timeout=40) as response:
+    stage = "下载 Windows 安装包" if out is not None else "读取发布信息"
+    if url.startswith("https://api.github.com/"):
+        stage = "检查 GitHub 版本列表"
+
+    def connection_error(exc):
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = f"GitHub 返回 HTTP {exc.code}，请稍后重试"
+        elif isinstance(reason, ssl.SSLCertVerificationError):
+            detail = "证书验证失败，请检查系统时间及代理证书"
+        elif isinstance(reason, socket.gaierror):
+            detail = "域名解析失败，请检查 DNS 和代理设置"
+        elif isinstance(reason, TimeoutError):
+            detail = "连接或读取超时，请稍后重试"
+        else:
+            detail = "连接中断或无法访问 GitHub，请检查网络和系统代理后重试"
+        return ValueError(f"{stage}失败：{detail}")
+
+    # Retry only before receiving a body. Never append a restarted download
+    # to a partially written ZIP or retry a certificate verification failure.
+    for attempt in range(2):
+        try:
+            response = urllib.request.urlopen(req, timeout=40)
+            break
+        except OSError as exc:
+            reason = getattr(exc, "reason", exc)
+            transient = isinstance(reason, (TimeoutError, ConnectionResetError))
+            if isinstance(exc, urllib.error.HTTPError):
+                transient = exc.code in (502, 503, 504)
+                exc.close()
+            if attempt or not transient:
+                raise connection_error(exc) from exc
+
+    def read_chunk(size):
+        try:
+            return response.read(size)
+        except (OSError, http.client.IncompleteRead) as exc:
+            raise connection_error(exc) from exc
+
+    with response:
         if not response.geturl().startswith("https://"):
             raise ValueError("拒绝非 HTTPS 下载")
         if out is None:
-            data = response.read(limit + 1)
+            data = read_chunk(limit + 1)
             if len(data) > limit:
                 raise ValueError("发布元数据过大")
             return data
         size = 0
-        while chunk := response.read(1024 * 1024):
+        while chunk := read_chunk(1024 * 1024):
             size += len(chunk)
             if size > limit:
                 raise ValueError("下载超出声明大小")

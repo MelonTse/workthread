@@ -304,7 +304,7 @@ def restore(s, path, apply=False):
                 ],
                 "conflict_policy": "full: replace with rollback copy; todos: identical IDs skip, different IDs stop",
             }
-        with s.lock:
+        with s.lock, s.read_lock:
             if manifest["scope"] == "todos":
                 data = json.loads((stage / "todos.json").read_text(encoding="utf-8"))
                 with s.db() as c:

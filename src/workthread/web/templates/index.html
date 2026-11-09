@@ -9,7 +9,7 @@
 
 <div class="sidebar-bottom">本地工作台<span class="version">{{ version }}</span></div>
 </aside>
-<div class="shell"><main><section class="page-heading"><h1 id="page-title">工作总览</h1><button class="primary" id="queue-ai">加入 AI 分析队列</button></section><div id="workspace-content" aria-live="polite"></div></main><div class="quick-capture"><button type="button" id="quick-toggle" class="primary" aria-haspopup="dialog" aria-controls="detail-dialog">＋ To Do</button></div></div>
+<div class="shell"><main><section class="page-heading"><h1 id="page-title">工作总览</h1><button class="primary" id="queue-ai">加入 AI 分析队列</button></section><div id="load-status" role="status"><span>正在读取工作台…</span> <button id="retry-load" type="button" hidden>重新读取</button></div><div id="workspace-content" aria-live="polite"></div></main><div class="quick-capture"><button type="button" id="quick-toggle" class="primary" aria-haspopup="dialog" aria-controls="detail-dialog">＋ To Do</button></div></div>
 <dialog id="detail-dialog" aria-labelledby="dialog-label"><div class="dialog-top"><span id="dialog-label" class="dialog-caption">To Do</span><button class="icon-button" id="close-detail" aria-label="关闭详情">×</button></div><div id="detail-content"></div></dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 </body></html>

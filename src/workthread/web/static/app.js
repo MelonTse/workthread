@@ -21,7 +21,7 @@ const states = {
     high: '高优先级',
     urgent: '紧急'
   };
-let data = {},
+let data = null,
   view = 'overview',
   selected = null;
 const titles = {
@@ -36,9 +36,10 @@ const toast = message => {
   $('#toast').style.display = 'block';
   setTimeout(() => $('#toast').style.display = 'none', 4000)
 };
-async function api(path, method = 'GET', body) {
+async function api(path, method = 'GET', body, signal) {
   const opt = {
     method,
+    signal,
     headers: {
       'X-CSRF-Token': $('meta[name="csrf-token"]').content
     }
@@ -141,9 +142,35 @@ function wireTodos() {
     }
   })
 }
+let readGeneration = 0;
+let reading = false;
+function loadStatus(message, retry = false) {
+  $('#load-status').hidden = !message;
+  $('#load-status span').textContent = message;
+  $('#retry-load').hidden = !retry;
+}
+
 async function refresh() {
-  data = await api('/snapshot');
-  render()
+  const generation = ++readGeneration;
+  reading = true;
+  if (!data) loadStatus('正在读取工作台…');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  try {
+    const next = await api('/snapshot?summary=1', 'GET', undefined, controller.signal);
+    if (generation !== readGeneration) return;
+    data = next;
+    loadStatus('');
+    render();
+  } catch (err) {
+    if (generation !== readGeneration) return;
+    const reason = controller.signal.aborted ? '读取超时' : err.message;
+    loadStatus((data ? '刷新失败，当前显示上次读取的数据。' : '工作台数据暂时无法读取。') + reason, true);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    if (generation === readGeneration) reading = false;
+  }
 }
 
 function switchView(v) {
@@ -167,13 +194,21 @@ function render() {
     knowledge: '＋ 添加知识',
     settings: '刷新状态'
   } [view];
-  ({
-    overview: overview,
-    todos: todoView,
-    mail: mailView,
-    knowledge: knowledgeView,
-    settings: settingsView
-  } [view])();
+  $('#quick-toggle').disabled = !data;
+  $('#queue-ai').disabled = !data;
+  if (!data) {
+    $('#workspace-content').innerHTML = view === 'settings' ? updateCard() : '';
+    if (view === 'settings') attempt(showSoftwareUpdate)();
+    return;
+  }
+  try {
+    ({overview, todos: todoView, mail: mailView, knowledge: knowledgeView, settings: settingsView})[view]();
+  } catch (err) {
+    $('#workspace-content').innerHTML = view === 'settings' ? updateCard() : '';
+    loadStatus('页面未能显示：' + err.message, true);
+    if (view === 'settings') attempt(showSoftwareUpdate)();
+    return;
+  }
   wireTodos();
   document.querySelectorAll('[data-work-scope]').forEach(b => b.onclick = () => {
     Object.assign(todoState, {
@@ -190,7 +225,7 @@ function overview() {
   const active = activeTodos(),
     review = data.review_items.filter(r => r.state === 'pending');
   let content =
-    `<div class="metrics">${Object.entries(scopeNames).map(([key,label])=>`<button class="metric" data-work-scope="${key}"><span class="metric-label">${label}</span><strong>${String(scopedTodos(key).length).padStart(2,'0')}</strong></button>`).join('')}</div><div class="dashboard-grid"><div>${card('工作清单',todoRows([...active].sort((a,b)=>['urgent','high','normal','low'].indexOf(a.priority)-['urgent','high','normal','low'].indexOf(b.priority)).slice(0,6)),'<button class="text-link" data-go="todos">查看全部 →</button>')}${card('最近沟通',data.messages.slice(0,3).map(m=>`<div class="mail-item" data-mail="${E(m.message_id)}"><strong>${E(m.subject)}</strong><p>${E(m.body_text.slice(0,100))}</p></div>`).join('')||'<div class="empty">暂无邮件</div>')}</div><div>${card('最近 AI 建议',`<div class="card-body"><div class="insight"><p>${E(data.analyses.at(-1)?.advice||'暂无处理建议')}</p></div><p class="section-space">${E(data.analyses.at(-1)?.summary||'尚无分析结果')}</p></div>`)}${card('工作脉络',`<div class="card-body stack"><div class="label-line"><span class="small">客户与企业</span><b>${data.customers.length}</b></div><div class="label-line"><span class="small">项目与订单</span><b>${data.cases.length}</b></div><div class="label-line"><span class="small">待确认建议</span>${badge('',review.length+' 项')}</div><div class="label-line"><span class="small">已确认知识</span><b>${data.knowledge_items.filter(k=>k.confirmed).length}</b></div></div>`)}<p class="small queue-status">${data.jobs.filter(j=>j.state==='pending').length} 项待处理 · 等待 WorkBuddy</p></div></div>`;
+    `<div class="metrics">${Object.entries(scopeNames).map(([key,label])=>`<button class="metric" data-work-scope="${key}"><span class="metric-label">${label}</span><strong>${String(scopedTodos(key).length).padStart(2,'0')}</strong></button>`).join('')}</div><div class="dashboard-grid"><div>${card('工作清单',todoRows([...active].sort((a,b)=>['urgent','high','normal','low'].indexOf(a.priority)-['urgent','high','normal','low'].indexOf(b.priority)).slice(0,6)),'<button class="text-link" data-go="todos">查看全部 →</button>')}${card('最近沟通',data.messages.slice(0,3).map(m=>`<div class="mail-item" data-mail="${E(m.message_id)}"><strong>${E(m.subject)}</strong><p>${E(m.preview)}</p></div>`).join('')||'<div class="empty">暂无邮件</div>')}</div><div>${card('最近 AI 建议',`<div class="card-body"><div class="insight"><p>${E(data.analyses.at(-1)?.advice||'暂无处理建议')}</p></div><p class="section-space">${E(data.analyses.at(-1)?.summary||'尚无分析结果')}</p></div>`)}${card('工作脉络',`<div class="card-body stack"><div class="label-line"><span class="small">客户与企业</span><b>${data.customers.length}</b></div><div class="label-line"><span class="small">项目与订单</span><b>${data.cases.length}</b></div><div class="label-line"><span class="small">待确认建议</span>${badge('',review.length+' 项')}</div><div class="label-line"><span class="small">已确认知识</span><b>${data.knowledge_items.filter(k=>k.confirmed).length}</b></div></div>`)}<p class="small queue-status">${data.jobs.filter(j=>j.state==='pending').length} 项待处理 · 等待 WorkBuddy</p></div></div>`;
   $('#workspace-content').innerHTML = content;
   wireMail()
 }
@@ -630,7 +665,7 @@ function mailView() {
                   data-select-mail="${E(m.message_id)}" aria-pressed="${m.message_id === mailState.messageId}">
             <small class="sender">${E(mailAddress(m.sender))}</small>
             <strong>${E(m.subject || '（无主题）')}</strong>
-            <span>${E(m.body_text.slice(0, 100))}</span>
+            <span>${E((m.preview ?? m.body_text ?? '').slice(0, 100))}</span>
             <small>${E(date(m.date))}</small>
           </button>`).join('') || '<div class="empty">没有匹配邮件。</div>'}</div>
       </article>
@@ -965,6 +1000,9 @@ function openKnowledgeEditor(item = null) {
 const settingsState = {
   tab: sessionStorage.getItem('workthread-settings-tab') === 'accounts' ? 'accounts' : 'runtime'
 };
+function updateCard() {
+  return card('软件更新','<div class="card-body stack"><div id="update-status" class="prewrap" role="status"></div><div id="update-actions" class="button-row"></div></div>');
+}
 async function showSoftwareUpdate() {
   const status = $('#update-status'), actions = $('#update-actions');
   const paint = (r, checked=false) => {
@@ -1001,7 +1039,7 @@ async function showSoftwareUpdate() {
             } catch (_) { /* detached updater owns the install lock */ }
           }, 2000);
         } catch (err) {
-          paint(r);
+          paint(operation === 'check' ? {...r, offer: null, ready: false} : r);
           status.textContent += '\n'+err.message;
         }
       };
@@ -1011,7 +1049,15 @@ async function showSoftwareUpdate() {
     if (r.offer && !r.ready) button('下载并检查','download');
     if (r.ready) button('备份并重启更新','apply');
   };
-  paint(await api('/software-update'));
+  try {
+    paint(await api('/software-update'));
+  } catch (err) {
+    status.textContent = '无法读取本机更新状态：' + err.message;
+    const retry = document.createElement('button');
+    retry.textContent = '重新读取更新状态';
+    retry.onclick = attempt(showSoftwareUpdate);
+    actions.replaceChildren(retry);
+  }
 }
 
 const runStates = {
@@ -1076,7 +1122,7 @@ async function refreshMailProgress() {
 function settingsView() {
   $('#workspace-content').innerHTML = `${tabBar([['runtime','运行与 AI'],['accounts','邮箱'],['backup','备份与恢复'],['update','软件更新']],settingsState.tab,'settings-tab','设置分类')}
     <section data-settings-panel="runtime" ${settingsState.tab==='runtime'?'':'hidden'}>
-      <div class="status-strip"><span>${badge('',data.health.ok?'运行正常':'需要检查')}</span><span>AI：${data.health.ai_schedule.enabled?'已启用':'未启用'}</span><button id="health-check">健康检查</button><button id="consume-results">读取 AI 结果</button>${data.accounts.some(a=>a.account_id==='demo')?'<button id="demo-ai">模拟分析</button>':''}</div>
+      <div class="status-strip"><span>${badge('','工作台已连接')}</span><span>AI：${data.health.ai_schedule.enabled?'已启用':'未启用'}</span><button id="health-check">健康检查</button><button id="consume-results">读取 AI 结果</button>${data.accounts.some(a=>a.account_id==='demo')?'<button id="demo-ai">模拟分析</button>':''}</div>
       <div class="split">${card('执行计划',`<form id="schedule-form" class="card-body form-grid compact-form"><label>工作时区<input name="timezone" value="${E(data.timezone)}"></label><label>每日分析时间<input name="time" type="time" value="${E(data.health.ai_schedule.time)}"></label><label>邮件同步间隔（分钟）<input name="interval" type="number" min="1" max="1440" value="${E(data.imap_interval_minutes)}"></label><div class="form-note">每日一次</div><button type="submit" class="primary">保存计划</button></form>`)}
       ${card('最近任务',`<div class="table-scroll"><table><thead><tr><th>时间</th><th>状态</th></tr></thead><tbody>${data.jobs.slice(0,6).map(j=>`<tr><td>${E(date(j.created_at))}</td><td>${badge('',runStates[j.state]||j.state)}</td></tr>`).join('')||'<tr><td colspan="2">暂无任务</td></tr>'}</tbody></table></div>`)}</div>
       <details class="card related-objects"><summary>运行信息与同步记录</summary><div class="card-body"><p class="prewrap">${E(data.health.workspace)}</p><div class="small muted">Windows / 真实邮箱 / WorkBuddy 无人值守：待验收</div>${data.sync_runs.slice(-5).map(r=>`<div class="compact-row"><time>${E(date(r.started_at))}</time>${badge('',runStates[r.state]||r.state)}</div>`).join('')||'<p>暂无同步记录</p>'}</div></details>
@@ -1089,7 +1135,7 @@ function settingsView() {
       <button type="submit" class="primary">保存配置</button><span class="form-note">保存后同步默认暂停；授权码存入系统凭证库</span></form></details>
     </section>
     <section data-settings-panel="update" ${settingsState.tab==='update'?'':'hidden'}>
-      ${card('软件更新','<div class="card-body stack"><div id="update-status" class="prewrap" role="status"></div><div id="update-actions" class="button-row"></div></div>')}
+      ${updateCard()}
     </section>
     <section data-settings-panel="backup" ${settingsState.tab==='backup'?'':'hidden'}><div class="split">
       ${card('备份',`<div class="card-body stack compact-form"><div class="button-row"><button data-backup="todos">备份 To Do</button><button data-backup="full" class="primary">完整备份</button></div><span class="form-note">普通 ZIP，无需密码，不含邮箱授权码</span></div>`)}
@@ -1319,9 +1365,11 @@ $('#queue-ai').onclick = attempt(async () => {
   toast(r.existing ? '已有待处理任务，等待 WorkBuddy 处理' : '已加入 AI 分析队列，等待 WorkBuddy 处理');
   await refresh()
 });
+$('#retry-load').onclick = attempt(refresh);
+render();
 attempt(refresh)();
 setInterval(() => {
-  if (!$('#detail-dialog').open && view === 'overview') attempt(refresh)()
+  if (!reading && !document.hidden && !$('#detail-dialog').open && view === 'overview') attempt(refresh)()
 }, 15000);
 
 setInterval(() => { if (!document.hidden) attempt(refreshMailProgress)() }, 2000);

@@ -1,10 +1,22 @@
 # WorkThread · 事脉 AI 工作台
 
+## Windows 安装 · WorkThread 1.0.0rc4
+
+将下面的指令交给已安装的 WorkBuddy：
+
+> 请按照 https://github.com/MelonTse/workthread 首页的 Windows 安装说明，在这台电脑上安装并配置 WorkThread。完成后打开工作台，并告诉我如何检查更新。
+
+[Windows 首次安装说明](https://github.com/MelonTse/workthread/blob/v1.0.0rc4/docs/windows/FIRST_INSTALL.md) · [下载 v1.0.0rc4 和核对程序包 SHA-256](https://github.com/MelonTse/workthread/releases/tag/v1.0.0rc4) · [从受支持的 rc3 升级](https://github.com/MelonTse/workthread/blob/v1.0.0rc4/docs/WINDOWS_PRESERVING_UPDATES.md)
+
+目标系统为 Windows 10 22H2 / Windows 11 x64。rc4 已完成 Windows Server 2022 自动化验证，桌面系统与 WorkBuddy 客户端验收待安排。安装后可在「设置与运行状态 → 软件更新」检查兼容版本。
+
+## 早期开发资料
+
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；WorkBuddy 负责分析。网页无需模型 API，可独立维护 To Do 和进展日志。
 
-当前版本：**1.0.0rc1**。Windows runner 的 49 项测试及冻结程序冒烟已通过，Mac 真实 WorkBuddy 合成文件交换已验证；Windows 用户电脑、真实 IMAP 与正式无人值守仍待验收。
+本分支下方保留 **1.0.0rc1** 开发说明。Windows runner 的 49 项测试及冻结程序冒烟已通过，Mac 真实 WorkBuddy 合成文件交换已验证；Windows 用户电脑、真实 IMAP 与正式无人值守仍待验收。
 
-Windows WorkBuddy 部署入口：[完整部署与真机验收提示词](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。提示词固定候选包、构建提交和 SHA-256，只用合成数据，不启用真实邮箱或正式定时任务。
+历史 rc1 Windows 部署资料：[完整部署与真机验收提示词](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。提示词固定候选包、构建提交和 SHA-256，只用合成数据，不启用真实邮箱或正式定时任务。
 
 ## Mac 开发与合成演示
 

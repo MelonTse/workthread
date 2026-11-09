@@ -13,12 +13,12 @@ if exist "%WT_RESTORE_DEST%" (
     pause
     exit /b 1
 )
-app\WorkThread.exe --workspace "%WT_RESTORE_DEST%" restore "%WT_RESTORE_SRC%"
+call "%~dp0Run.cmd" --workspace "%WT_RESTORE_DEST%" restore "%WT_RESTORE_SRC%"
 if errorlevel 1 goto failed
 set "WT_RESTORE_CONFIRM="
 set /p "WT_RESTORE_CONFIRM=Type RESTORE to apply the preview to this new directory: "
 if not "%WT_RESTORE_CONFIRM%"=="RESTORE" exit /b 0
-app\WorkThread.exe --workspace "%WT_RESTORE_DEST%" restore "%WT_RESTORE_SRC%" --apply
+call "%~dp0Run.cmd" --workspace "%WT_RESTORE_DEST%" restore "%WT_RESTORE_SRC%" --apply
 if errorlevel 1 goto failed
 pause
 exit /b 0

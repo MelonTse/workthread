@@ -45,6 +45,18 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
+    args = sys.argv[1:] if argv is None else argv
+    if args[:1] == ["--maintenance"]:
+        from .updating.controller import cli
+        try:
+            result = cli(args[1:])
+            if result is not None:
+                print(dumps(result))
+        except (ValueError, OSError, KeyError, RuntimeError) as e:
+            print(str(e), file=sys.stderr)
+            raise SystemExit(2)
+        return
+
     default = (
         Path(sys.executable).resolve().parent.parent / "workspace"
         if getattr(sys, "frozen", False)
@@ -93,9 +105,11 @@ def main(argv=None):
 
             seed(store)
         from .server import create_app
-        from waitress import serve
+        from waitress import create_server, wasyncore
+        from .updating.controller import Updates, install_root
 
         stop = threading.Event()
+        updates = Updates(install_root(store.root), stop.set, a.port)
         t = threading.Thread(target=worker, args=(store, stop), daemon=True)
         t.start()
         url = f"http://127.0.0.1:{a.port}"
@@ -103,10 +117,24 @@ def main(argv=None):
         if a.open:
             threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         try:
-            serve(create_app(store), host="127.0.0.1", port=a.port, threads=6)
+            sockets = {}
+            server = create_server(create_app(store, updates), host="127.0.0.1", port=a.port, threads=6, map=sockets)
+            try:
+                while not stop.is_set():
+                    wasyncore.loop(timeout=0.2, count=1, map=sockets)
+                # Flush the final apply response, then stop accepting new requests.
+                for _ in range(4):
+                    wasyncore.loop(timeout=0.05, count=1, map=sockets)
+            finally:
+                server.close()
+                server.task_dispatcher.shutdown(timeout=40)
+                if updates.stopping:
+                    while server.task_dispatcher.threads:
+                        time.sleep(0.1)
+                wasyncore.close_all(map=sockets)
         finally:
             stop.set()
-            t.join(timeout=35)
+            t.join(timeout=None if updates.stopping else 35)
         return
     if a.command == "doctor":
         result = store.health()

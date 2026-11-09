@@ -89,11 +89,15 @@ def test_actual_packaging_script_preserves_hidden_skill_bytes(tmp_path, monkeypa
     monkeypatch.syspath_prepend(str(source / "scripts"))
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(importlib.metadata, "distributions", lambda: [])
+    # This cross-platform ZIP layout test cannot run the Windows C# compiler.
+    def compile_stub(args, check):
+        Path(next(arg[5:] for arg in args if arg.startswith("/out:"))).write_bytes(b"synthetic launcher")
+    monkeypatch.setattr("subprocess.run", compile_stub)
     runpy.run_path(str(source / "scripts/package_release.py"), run_name="__main__")
-    archive = source / "artifacts/WorkThread-1.0.0rc3-windows-x64.zip"
+    archive = source / "artifacts/WorkThread-1.0.0rc4-windows-x64.zip"
     with zipfile.ZipFile(archive) as z:
         assert z.testzip() is None
-        prefix = "WorkThread-1.0.0rc3-windows-x64/"
+        prefix = "WorkThread-1.0.0rc4-windows-x64/"
         manifest = json.loads(z.read(prefix + "SHA256SUMS.json"))
         for path, expected in manifest.items():
             assert hashlib.sha256(z.read(prefix + path)).hexdigest() == expected

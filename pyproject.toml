@@ -1,9 +1,20 @@
 [project]
 name = "workthread"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 description = "Local personal AI workbench"
 requires-python = ">=3.13,<3.14"
-dependencies = ["flask>=3.1,<4", "waitress>=3,<4", "jsonschema>=4.23,<5", "imapclient>=3,<4", "keyring>=25,<26", "nh3>=0.3,<1", "filelock>=3.20,<4", "tzdata>=2026.1"]
+dependencies = [
+    "flask>=3.1,<4",
+    "waitress>=3,<4",
+    "jsonschema>=4.23,<5",
+    "imapclient>=3,<4",
+    "keyring>=25,<26",
+    "nh3>=0.3,<1",
+    "filelock>=3.20,<4",
+    "tzdata>=2026.1",
+    "cryptography>=50.0.2,<51",
+    "packaging>=25,<28",
+]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pyinstaller>=6.16,<7", "ruff>=0.14,<1", "jsbeautifier>=1.15,<2"]

@@ -2,18 +2,18 @@
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
-app\WorkThread.exe --workspace "%~dp0workspace" init
+call "%~dp0Run.cmd" --workspace "%~dp0workspace" init
 if errorlevel 1 goto failed
-app\WorkThread.exe --workspace "%~dp0acceptance" init
+call "%~dp0Run.cmd" --workspace "%~dp0acceptance" init
 if errorlevel 1 goto failed
-app\WorkThread.exe --workspace "%~dp0workspace" doctor
+call "%~dp0Run.cmd" --workspace "%~dp0workspace" doctor
 if errorlevel 1 goto failed
-app\WorkThread.exe --workspace "%~dp0acceptance" doctor
+call "%~dp0Run.cmd" --workspace "%~dp0acceptance" doctor
 if errorlevel 1 goto failed
 echo Both independent workspaces initialized. Start with Start.cmd.
-pause
+if /I not "%~1"=="/quiet" pause
 exit /b 0
 :failed
 echo Initialization failed or custom template conflicts need attention. Existing data is preserved.
-pause
+if /I not "%~1"=="/quiet" pause
 exit /b 1

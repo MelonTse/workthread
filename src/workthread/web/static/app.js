@@ -965,6 +965,55 @@ function openKnowledgeEditor(item = null) {
 const settingsState = {
   tab: 'runtime'
 };
+async function showSoftwareUpdate() {
+  const status = $('#update-status'), actions = $('#update-actions');
+  const paint = (r, checked=false) => {
+    actions.replaceChildren();
+    const lines = ['当前版本：'+r.current];
+    if (r.last) lines.push(r.last.error ? '上次更新失败：'+r.last.error : '已更新至 '+r.last.version);
+    if (r.transaction === 'rolled-back') lines.push('原版本与工作空间已恢复。');
+    if (r.offer) lines.push('可用版本：'+r.offer.version, r.offer.notes);
+    else if (checked) lines.push('暂无适用于此安装的已发布更新。');
+    if (!r.enabled) lines.push('请在 Windows 正式工作空间中检查更新。');
+    status.textContent = lines.filter(Boolean).join('\n');
+    const button = (label, operation) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.disabled = !r.enabled;
+      b.onclick = async () => {
+        if (operation === 'apply' && !window.confirm('请先关闭 WorkBuddy。工作台将暂停、备份两个工作空间，并重启更新。继续吗？')) return;
+        for (const el of actions.children) el.disabled = true;
+        try {
+          const next = await api('/software-update/'+operation,'POST',{confirmed:operation==='apply'});
+          if (operation !== 'apply') { paint(next,true); return; }
+          actions.replaceChildren();
+          status.textContent = '正在备份并重启。请保持此页面打开。';
+          const deadline = Date.now()+15*60*1000;
+          const timer = setInterval(async () => {
+            if (Date.now()>deadline) {
+              clearInterval(timer);
+              status.textContent = '尚未重新连接。请从原 Start.cmd 查看更新或恢复状态，不要覆盖工作空间。';
+              return;
+            }
+            try {
+              const s = await api('/software-update');
+              if (s.last) { clearInterval(timer); sessionStorage.setItem('workthread-update-return','1'); location.reload(); }
+            } catch (_) { /* detached updater owns the install lock */ }
+          }, 2000);
+        } catch (err) {
+          paint(r);
+          status.textContent += '\n'+err.message;
+        }
+      };
+      actions.append(b);
+    };
+    button('检查更新','check');
+    if (r.offer && !r.ready) button('下载并检查','download');
+    if (r.ready) button('备份并重启更新','apply');
+  };
+  paint(await api('/software-update'));
+}
+
 const runStates = {
   pending: '待执行',
   running: '运行中',
@@ -975,7 +1024,7 @@ const runStates = {
 };
 
 function settingsView() {
-  $('#workspace-content').innerHTML = `${tabBar([['runtime','运行与 AI'],['accounts','邮箱'],['backup','备份与恢复']],settingsState.tab,'settings-tab','设置分类')}
+  $('#workspace-content').innerHTML = `${tabBar([['runtime','运行与 AI'],['accounts','邮箱'],['backup','备份与恢复'],['update','软件更新']],settingsState.tab,'settings-tab','设置分类')}
     <section data-settings-panel="runtime" ${settingsState.tab==='runtime'?'':'hidden'}>
       <div class="status-strip"><span>${badge('',data.health.ok?'运行正常':'需要检查')}</span><span>AI：${data.health.ai_schedule.enabled?'已启用':'未启用'}</span><button id="health-check">健康检查</button><button id="consume-results">读取 AI 结果</button>${data.accounts.some(a=>a.account_id==='demo')?'<button id="demo-ai">模拟分析</button>':''}</div>
       <div class="split">${card('执行计划',`<form id="schedule-form" class="card-body form-grid compact-form"><label>工作时区<input name="timezone" value="${E(data.timezone)}"></label><label>每日分析时间<input name="time" type="time" value="${E(data.health.ai_schedule.time)}"></label><label>邮件同步间隔（分钟）<input name="interval" type="number" min="1" max="1440" value="${E(data.imap_interval_minutes)}"></label><div class="form-note">每日一次</div><button type="submit" class="primary">保存计划</button></form>`)}
@@ -989,16 +1038,21 @@ function settingsView() {
       <details class="wide advanced-fields"><summary>文件夹设置</summary><div class="form-grid"><label>收件箱<input name="inbox_folder" placeholder="INBOX"></label><label>已发送<input name="sent_folder" placeholder="自动识别"></label><label class="wide">其他文件夹<input name="extra_folders" placeholder="逗号分隔"></label></div></details>
       <button type="submit" class="primary">保存配置</button><span class="form-note">保存后同步默认暂停；授权码存入系统凭证库</span></form></details>
     </section>
+    <section data-settings-panel="update" ${settingsState.tab==='update'?'':'hidden'}>
+      ${card('软件更新','<div class="card-body stack"><div id="update-status" class="prewrap" role="status"></div><div id="update-actions" class="button-row"></div></div>')}
+    </section>
     <section data-settings-panel="backup" ${settingsState.tab==='backup'?'':'hidden'}><div class="split">
       ${card('备份',`<div class="card-body stack compact-form"><div class="button-row"><button data-backup="todos">备份 To Do</button><button data-backup="full" class="primary">完整备份</button></div><span class="form-note">普通 ZIP，无需密码，不含邮箱授权码</span></div>`)}
       ${card('恢复',`<form id="restore-form" class="card-body stack compact-form"><label>备份文件<input type="file" name="file" accept=".zip" required></label><button type="submit">校验备份</button><div id="restore-preview" class="small prewrap"></div><button type="button" id="apply-restore" class="primary" hidden>确认恢复</button></form>`)}</div>
     </section>`;
   bindTabs('[data-settings-tab]', key => {
     settingsState.tab = key;
+    if (key === 'update') attempt(showSoftwareUpdate)();
     markTabs('[data-settings-tab]', key);
     document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset
       .settingsPanel !== key)
   });
+  if (settingsState.tab === 'update') attempt(showSoftwareUpdate)();
   $('#health-check').onclick = attempt(async () => {
     const h = await api('/system/status');
     toast(h.ok ? '健康检查通过' : '健康检查发现异常')
@@ -1135,6 +1189,11 @@ window.addEventListener('hashchange', () => {
   if (titles[next] && next !== view) switchView(next);
 });
 if (titles[location.hash.slice(1)]) view = location.hash.slice(1);
+if (sessionStorage.getItem('workthread-update-return')) {
+  sessionStorage.removeItem('workthread-update-return');
+  settingsState.tab = 'update';
+  view = 'settings';
+}
 $('#queue-ai').onclick = attempt(async () => {
   if (view === 'todos') {
     await openTodo();

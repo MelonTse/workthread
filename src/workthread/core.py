@@ -640,10 +640,11 @@ class Store:
             integrity = c.execute("PRAGMA integrity_check").fetchone()[0]
             foreign = list(c.execute("PRAGMA foreign_key_check"))
         import os, shutil, sys
+        from . import __version__
 
         space_ok = shutil.disk_usage(self.root).free > 100 * 1024 * 1024
         return {
-            "version": "1.0.0rc3",
+            "version": __version__,
             "python": sys.version.split()[0],
             "schema_version": VERSION,
             "disk_space_ok": space_ok,

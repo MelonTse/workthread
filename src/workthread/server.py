@@ -14,7 +14,9 @@ from .ai import Bridge
 from .operations import backup, backup_filename, restore, import_legacy, undo_import
 
 
-def create_app(store):
+def create_app(store, updates=None):
+    from .updating.controller import Updates
+    updates = updates or Updates(None)
     app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
     app.secret_key = secrets.token_hex(32)
     app.config.update(
@@ -26,6 +28,8 @@ def create_app(store):
 
     @app.before_request
     def guard():
+        if updates.stopping:
+            return jsonify(error="工作台正在停机更新"), 503
         host = request.host.split(":")[0]
         if host not in ("127.0.0.1", "localhost", "[::1]"):
             return jsonify(error="local requests only"), 403
@@ -79,6 +83,16 @@ def create_app(store):
 
         session["csrf"] = session.get("csrf") or secrets.token_hex(32)
         return render_template("index.html", csrf=session["csrf"], version=__version__)
+
+    @app.get("/api/v1/software-update")
+    def update_status():
+        return jsonify(updates.status())
+
+    @app.post("/api/v1/software-update/<action>")
+    def update_action(action):
+        if action not in {"check", "download", "apply"}:
+            return jsonify(error="未知更新操作"), 404
+        return jsonify(updates.action(action, (request.get_json(silent=True) or {}).get("confirmed") is True))
 
     @app.get("/api/v1/snapshot")
     def snapshot():

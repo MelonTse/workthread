@@ -7,11 +7,13 @@ import sys
 import importlib.metadata
 import os
 import platform
+import subprocess
 from pathlib import Path
 from check_bundle import check_bundle
 
 root = Path(__file__).resolve().parents[1]
-output = root / "artifacts" / "WorkThread-1.0.0rc3-windows-x64"
+from workthread import __version__
+output = root / "artifacts" / f"WorkThread-{__version__}-windows-x64"
 if sys.platform != "win32":
     raise SystemExit(
         "Windows packaging must run on Windows; use native spec build only for Mac smoke tests"
@@ -22,9 +24,15 @@ if output.exists():
 output.mkdir(parents=True)
 shutil.copytree(root / "dist/WorkThread", output / "app")
 (output / "tools").mkdir()
+# Compile the fixed EXE shortcut against the Windows inbox .NET Framework.
+launcher = root / "packaging/PortableLauncher.cs"
+compiler = Path(os.environ.get("WINDIR", "C:/Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+subprocess.run([str(compiler), "/nologo", "/target:exe", "/platform:x64",
+                "/out:" + str(output / "tools/PortableLauncher.exe"), str(launcher)], check=True)
 for f in ("install.ps1", "upgrade.ps1"):
     shutil.copy2(root / "scripts" / f, output / "tools" / f)
 for src, dest in [
+    ("portable-run.cmd", "Run.cmd"),
     ("portable-start.cmd", "Start.cmd"),
     ("portable-install.cmd", "Install.cmd"),
     ("portable-health.cmd", "Health.cmd"),
@@ -58,7 +66,7 @@ for distribution in importlib.metadata.distributions():
     json.dumps({"python": sys.version, "packages": versions}, indent=2)
 )
 (output / "BUILD_INFO.json").write_text(json.dumps({
-    "version": "1.0.0rc3",
+    "version": __version__,
     "commit_sha": os.environ.get("GITHUB_SHA"),
     "runner_os": platform.system(),
     "machine": platform.machine(),

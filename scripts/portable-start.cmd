@@ -2,5 +2,5 @@
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
-app\WorkThread.exe --workspace "%~dp0workspace" serve --open
+call "%~dp0Run.cmd" --workspace "%~dp0workspace" serve --open
 pause

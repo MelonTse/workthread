@@ -1,8 +1,16 @@
 # WorkThread · 事脉 AI 工作台
 
+## Windows 安装
+
+把这句话交给已安装的 WorkBuddy：
+
+> 请按照 https://github.com/MelonTse/workthread 首页的 Windows 安装说明，在这台电脑上安装并配置 WorkThread。完成后打开工作台，并告诉我如何检查更新。
+
+[Windows 安装说明与推荐版本 v1.0.0rc4](docs/windows/FIRST_INSTALL.md) · Windows 10 22H2 / Windows 11 x64
+
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；WorkBuddy 负责分析。网页无需模型 API，可独立维护 To Do 和进展日志。
 
-当前源码候选版本：**1.0.0rc3**，本轮仅 R0 本地修复与测试；尚无 rc3 Windows Commit/Actions/安装包。已发布 rc2 为 8f4cea4d37b0ee9ecca0ec21c3d4394fbe45d5ea，历史产物和验收报告保留。根据用户提供的 Windows G5 实测，正式 Skill 分发改用 `.codebuddy/skills/`；rc3 原始包的客户端发现和调用仍须重新真机验收。
+当前分支为 **1.0.0rc4 本地升级候选**，基于已通过 Windows 构建的 v3 UI rc3。rc4 尚未发布。网页更新入口、首次从 rc3 升级的条件及维护者签名办法见[保留本机数据升级说明](docs/WINDOWS_PRESERVING_UPDATES.md)，验证边界见[本地测试报告](docs/LOCAL_UPDATE_ACCEPTANCE.md)。
 
 Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。部署入口：[全新部署与真机验收提示词（rc3 R0）](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。只用合成数据，真实邮箱与正式计划保持禁用。
 

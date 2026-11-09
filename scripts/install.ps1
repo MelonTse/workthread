@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'app\WorkThread.exe'
+$exe = Join-Path $root 'Run.cmd'
 if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'WorkThread.exe missing; extract the whole candidate ZIP first' }
 if (Get-Process WorkThread -ErrorAction SilentlyContinue) { throw 'Close WorkThread before initializing this installation' }
 foreach ($space in @('workspace', 'acceptance')) {

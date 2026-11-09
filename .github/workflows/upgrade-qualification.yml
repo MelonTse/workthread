@@ -1,0 +1,62 @@
+name: Windows rc3 upgrade qualification
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/rc4-windows-distribution]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - run: uv sync --frozen --python 3.13
+      - name: Generate a temporary qualification key (never publish this build)
+        shell: pwsh
+        run: |
+          $env:WORKTHREAD_SIGNING_KEY_FILE = Join-Path $env:RUNNER_TEMP 'qualification.raw'
+          $env:WORKTHREAD_BUILD_PUBLIC_KEY = Join-Path $env:RUNNER_TEMP 'release-public.hex'
+          uv run --frozen python -c "import os; from pathlib import Path; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as K; k=K.generate(); Path(os.environ['WORKTHREAD_SIGNING_KEY_FILE']).write_bytes(k.private_bytes_raw()); Path(os.environ['WORKTHREAD_BUILD_PUBLIC_KEY']).write_text(k.public_key().public_bytes_raw().hex(),encoding='ascii')"
+          "WORKTHREAD_SIGNING_KEY_FILE=$env:WORKTHREAD_SIGNING_KEY_FILE" >> $env:GITHUB_ENV
+          "WORKTHREAD_BUILD_PUBLIC_KEY=$env:WORKTHREAD_BUILD_PUBLIC_KEY" >> $env:GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: WorkThread-windows-candidate
+          run-id: 42168486079
+          github-token: ${{ github.token }}
+          path: artifacts/early
+      - uses: actions/download-artifact@v4
+        with:
+          name: WorkThread-windows-candidate
+          run-id: 42332349658
+          github-token: ${{ github.token }}
+          path: artifacts/ui
+      - run: uv run --frozen pytest -q
+      - run: uv run --frozen pyinstaller --noconfirm packaging/workthread.spec
+      - run: uv run --frozen python scripts/package_release.py
+      - name: Qualify both historical Windows executables
+        run: |
+          $candidate = (Get-ChildItem artifacts/WorkThread-*-windows-x64.zip).FullName
+          uv run --frozen python scripts/check_windows_upgrade.py --candidate $candidate --rc3 artifacts/early/WorkThread-1.0.0rc3-windows-x64.zip artifacts/ui/WorkThread-1.0.0rc3-windows-x64.zip
+
+  fresh:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - run: uv sync --frozen --python 3.13
+      - name: Exercise fresh install and first update through Chromium
+        shell: pwsh
+        run: |
+          $deps = Join-Path $env:RUNNER_TEMP 'workthread-browser'
+          npm install --prefix $deps --ignore-scripts --no-audit --no-fund playwright-core@1.56.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:WT_QA_PLAYWRIGHT = Join-Path $deps 'node_modules/playwright-core'
+          $env:WT_QA_CHROME = Join-Path $env:ProgramFiles 'Google/Chrome/Application/chrome.exe'
+          uv run --frozen python scripts/qualify_fresh_windows.py

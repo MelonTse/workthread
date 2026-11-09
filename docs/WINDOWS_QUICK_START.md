@@ -1,6 +1,6 @@
-# Windows 10 rc3 全新安装速查（rc3 R0 待构建）
+# Windows 10 rc3 全新安装速查（历史全新安装流程）
 
-本页准备供后续批准阶段使用。当前没有 rc3 Windows 构建 SHA 或正式安装授权，不能用 rc1 包代替。
+本页记录 rc3 的全新安装流程。如果已经有程序和数据，请看[保留本机数据升级](WINDOWS_PRESERVING_UPDATES.md)，不要用本页步骤解压覆盖。
 
 1. R2 交付和真机授权后，资料放 `F:\WorkThread-Offline-Deploy-V2`。依据 R1 实际构建报告及 .zip.sha256，用 PowerShell `Get-FileHash -Algorithm SHA256` 核对程序 ZIP；按 SHA256SUMS.json 检查包内文件，JSON 使用 UTF-8。
 2. 目标环境为 Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。完整解压到新的 `F:\WorkThread`，无需安装 Python。若此目录已有内容，停止并选择新目录，不覆盖 rc1。

@@ -6,6 +6,10 @@ param(
     [string]$PackagePath
 )
 $ErrorActionPreference = 'Stop'
+# WorkBuddy or pwsh can launch Windows PowerShell with a Core-only module path.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $env:PSModulePath = (Join-Path $PSHOME 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
+}
 $version = '1.0.0rc4'
 $name = "WorkThread-$version-windows-x64"
 $system = Get-CimInstance Win32_OperatingSystem
@@ -45,7 +49,11 @@ try {
         $PackagePath = Join-Path $stage "$name.zip"
         Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/MelonTse/workthread/releases/download/v$version/$name.zip" -OutFile $PackagePath
     }
-    if ((Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash -ne $ExpectedSha256) { throw 'Program ZIP SHA-256 mismatch.' }
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($PackagePath)
+    try { $actual = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-','') }
+    finally { $stream.Dispose(); $hasher.Dispose() }
+    if ($actual -ne $ExpectedSha256) { throw 'Program ZIP SHA-256 mismatch.' }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($PackagePath)
     try { $bytes = ($zip.Entries | Measure-Object -Property Length -Sum).Sum }

@@ -136,7 +136,8 @@ def main():
             "-ExpectedSha256",
             rel.digest(old),
         ]
-        invalid = subprocess.run([*args[:-1], "0" * 64], check=False)
+        invalid = subprocess.run([*args[:-1], "0" * 64], capture_output=True, check=False)
+        assert b"SHA-256 mismatch" in invalid.stderr, invalid.stderr
         assert invalid.returncode and not target.exists()
         run(args, timeout=180)
         # Same installer must refuse a second invocation without modifying user files.

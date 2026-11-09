@@ -1,6 +1,6 @@
 # Windows 保留本机数据升级
 
-此分支是 1.0.0rc4 本地候选。下列是待签名、Windows 原包验收通过之后的操作说明，不是已经可下载的正式版本。仅支持 Windows x64 本地磁盘的便携安装；正式与验收空间须均已初始化，数据库均为 schema 2。
+本文适用于官方签名的 Windows x64 发布候选版 1.0.0rc4。仅支持 Windows x64 本地磁盘的便携安装；正式与验收空间须均已初始化，数据库均为 schema 2。
 
 **首次从 rc3 升级。** 使用新版本的独立工具，不能运行旧 rc3 中禁用升级的脚本。将受信任的新包完整解压在旧安装目录之外。首次执行前须通过独立可信渠道核对发布者及包指纹；仅在同一下载目录看到一个 SHA 文件不能建立初次信任。另保留原签名 ZIP、update.json、update.sig，不要解压覆盖已安装程序。
 
@@ -16,6 +16,6 @@
 - 升级中断后使用原 Start.cmd。启动器在开放业务写入前处理未完成事务。若发现目标工作空间有快照之后的新写入，保持双方目录、停止启动，人工比较后再决定。已经成功的事务不自动回滚，避免丢失升级之后产生的数据。
 - 不要删除事务目录、手改 active.json 或直接运行内部版本目录的 EXE。空间预检会计入两个完整副本、程序并排副本和余量。旧程序直接快捷方式首次切换为小型启动器；原完整运行时仍保留。未批准业务迁移的新数据库版本一律拒绝。
 
-**维护者发布。** 使用新版本号和唯一 tag（例如候选 v1.0.0rc4）。通过 Windows 原生构建和升级验收后才考虑发布。构建时 `WORKTHREAD_BUILD_PUBLIC_KEY` 指向只含 32 字节 Ed25519 公钥十六进制的 `release-public.hex`；常规 Windows 工作流可从仓库变量 `WORKTHREAD_UPDATE_PUBLIC_KEY` 读取**公钥**。私钥不进仓库、客户端或普通构建环境。离线签名机的 `WORKTHREAD_SIGNING_KEY_FILE` 指向 32 字节原始私钥，用 `scripts/sign_update.py <程序ZIP> --output <新元数据目录> --source <旧版本>@<完整SHA>` 生成 update.json 和 update.sig，逐一列出验收通过的来源。当前工具不支持自动换根密钥。发布到 MelonTse/workthread 的对应 GitHub Release，附原 ZIP 和两个签名元数据文件。不要替换同版本的发布文件；正式版不接受 rc 候选。
+**维护者发布。** 使用新版本号和唯一 tag（例如候选 v1.0.0rc4）。通过 Windows 原生构建和升级验收后才考虑发布。构建时 `WORKTHREAD_BUILD_PUBLIC_KEY` 指向只含 32 字节 Ed25519 公钥十六进制的 `release-public.hex`；正式 Windows 工作流从版本控制的 `packaging/release-public.hex` 嵌入维护者公钥。私钥不进仓库、客户端或普通构建环境。离线签名机的 `WORKTHREAD_SIGNING_KEY_FILE` 指向 32 字节原始私钥，用 `scripts/sign_update.py <程序ZIP> --output <新元数据目录> --source <旧版本>@<完整SHA>` 生成 update.json 和 update.sig，逐一列出验收通过的来源。当前工具不支持自动换根密钥。发布到 MelonTse/workthread 的对应 GitHub Release，附原 ZIP 和两个签名元数据文件。不要替换同版本的发布文件；正式版不接受 rc 候选。
 
-**Windows 原包验收。** `Windows rc3 upgrade qualification` 是仅供手动发起的独立工作流：下载两个历史 Actions 产物、对内部 ZIP 核对固定 SHA-256，以一次性测试密钥构建不发布的候选，在临时目录实际运行旧 EXE 和升级工具。Artifact 过期时验收应失败，可使用同哈希的离线存档在 Windows 上运行 `scripts/check_windows_upgrade.py --help` 所列入口。Windows-2022 runner 的成功不能替代 Windows 10 19045 + WorkBuddy 客户端验收。
+**Windows 原包验收。** `Windows rc3 upgrade qualification` 是候选分支上自动运行且可手动发起的独立工作流：下载两个历史 Actions 产物、对内部 ZIP 核对固定 SHA-256，以一次性测试密钥构建不发布的候选，在临时目录实际运行旧 EXE 和升级工具。Artifact 过期时验收应失败，可使用同哈希的离线存档在 Windows 上运行 `scripts/check_windows_upgrade.py --help` 所列入口。Windows-2022 runner 的成功不能替代 Windows 10 19045 + WorkBuddy 客户端验收。

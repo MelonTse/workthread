@@ -10,9 +10,9 @@
 
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；WorkBuddy 负责分析。网页无需模型 API，可独立维护 To Do 和进展日志。
 
-当前分支为 **1.0.0rc4 本地升级候选**，基于已通过 Windows 构建的 v3 UI rc3。rc4 尚未发布。网页更新入口、首次从 rc3 升级的条件及维护者签名办法见[保留本机数据升级说明](docs/WINDOWS_PRESERVING_UPDATES.md)，验证边界见[本地测试报告](docs/LOCAL_UPDATE_ACCEPTANCE.md)。
+Windows x64 发布候选版 **1.0.0rc4** 包含邮件拉取断点续传与保留本机数据的网页升级。发布资产与程序 ZIP 的 SHA-256 见 [v1.0.0rc4 发布页](https://github.com/MelonTse/workthread/releases/tag/v1.0.0rc4)。首次从受支持的 rc3 升级，请参阅[升级说明](docs/WINDOWS_PRESERVING_UPDATES.md)。
 
-Windows 目标：Windows 10 Professional 22H2 build 19045 x64、WorkBuddy 5.9.3。部署入口：[全新部署与真机验收提示词（rc3 R0）](docs/WINDOWS_WORKBUDDY_DEPLOY_PROMPT.md)。只用合成数据，真实邮箱与正式计划保持禁用。
+Windows Server 2022 上已自动验证两个历史 rc3 的升级和全新 rc4 的首次网页更新。Windows 10 19045、Windows 11 与 WorkBuddy 客户端的安装、Skills 发现及实际调用仍待桌面验收。
 
 ## v3 UI 源码更新
 

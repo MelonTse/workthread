@@ -17,17 +17,12 @@ jobs:
       - run: uv sync --frozen --python 3.13
       - run: uv run --frozen pytest -q --junitxml=artifacts/windows-tests.xml
       - run: uv run --frozen python scripts/check_source.py
-      - name: Embed release verification key when configured
+      - name: Embed the maintainer update verification key
         shell: pwsh
-        env:
-          PUBLIC_HEX: ${{ vars.WORKTHREAD_UPDATE_PUBLIC_KEY }}
         run: |
-          if ($env:PUBLIC_HEX) {
-            if ($env:PUBLIC_HEX -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid Ed25519 public key' }
-            $p = Join-Path $env:RUNNER_TEMP 'release-public.hex'
-            [IO.File]::WriteAllText($p, $env:PUBLIC_HEX)
-            "WORKTHREAD_BUILD_PUBLIC_KEY=$p" >> $env:GITHUB_ENV
-          }
+          $p = (Resolve-Path 'packaging/release-public.hex').Path
+          if ((Get-Content -Raw $p).Trim() -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid Ed25519 public key' }
+          "WORKTHREAD_BUILD_PUBLIC_KEY=$p" >> $env:GITHUB_ENV
       - run: uv run --frozen pyinstaller --noconfirm packaging/workthread.spec
       - name: Frozen binary smoke test including static resources and backup
         run: uv run --frozen python scripts/smoke_frozen.py dist/WorkThread/WorkThread.exe

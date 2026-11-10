@@ -17,6 +17,12 @@ const [lib,exe,url,version="1.0.0rc5"]=process.argv.slice(2);
   await page.getByText('正在备份并重启。请保持此页面打开。').waitFor();
   await page.getByText('已更新至 '+version,{exact:false}).waitFor({timeout:120000});
   if (!(await page.locator('#update-status').innerText()).includes('当前版本：'+version)) throw Error('wrong active version');
+  await page.locator('[data-settings-tab="runtime"]').click();
+  const settings=page.locator('#draft-ai-settings');
+  await settings.locator('[name="mode"]').selectOption('api');
+  await settings.locator('[name="provider"]').selectOption('deepseek');
+  if (!(await settings.locator('[name="model"]').isVisible())) throw Error('model settings missing after upgrade');
+  console.log('API settings PASS: model API and DeepSeek selectable after the update.');
   console.log('Browser PASS: check, download, cancel, confirm, disconnect, reconnect, version and result.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

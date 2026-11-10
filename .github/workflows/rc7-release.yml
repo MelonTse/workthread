@@ -1,0 +1,87 @@
+name: Qualify and publish signed rc7
+on:
+  push:
+    branches: ['codex/rc7-release-verification']
+permissions:
+  contents: read
+  actions: read
+env:
+  RC7_COMMIT: a74eec51dcd9e889ac4f299d3871409d8aeb6d6e
+  RC7_BUILD_RUN: '42729714600'
+jobs:
+  qualify:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ['1.0.0rc4', '1.0.0rc5', '1.0.0rc6']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - run: uv sync --frozen --python 3.13
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RC7_BUILD_RUN }}
+          name: WorkThread-windows-candidate
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Upgrade original Windows installation and compare both workspaces
+        run: uv run --frozen python scripts/qualify_release_update.py --from-version "${{ matrix.source }}" --candidate artifacts/WorkThread-1.0.0rc7-windows-x64.zip --metadata qualification --commit $env:RC7_COMMIT
+  publish:
+    needs: qualify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RC7_BUILD_RUN }}
+          name: WorkThread-windows-candidate
+          github-token: ${{ github.token }}
+          path: assets
+      - name: Verify signed identity and publish the four update assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v1.0.0rc7
+          name=WorkThread-1.0.0rc7-windows-x64.zip
+          cp qualification/update.{json,sig} assets/
+          cd assets
+          sha="$(sha256sum "$name" | cut -d' ' -f1)"
+          sha256sum -c "$name.sha256"
+          jq -e --arg sha "$sha" --arg commit "$RC7_COMMIT" '.sha256 == $sha and .commit_sha == $commit and .version == "1.0.0rc7"' update.json
+          printf '%s\n' '邮件草稿生成与重写、待办录入与维护、客户知识整理支持模型 API 与 WorkBuddy。' '官方 rc4、rc5、rc6 可在「设置与运行状态 → 软件更新」保留数据升级。' '' "Windows 程序 ZIP SHA-256: $sha" > notes.md
+          gh release create "$tag" "$name" "$name.sha256" update.json update.sig --draft --prerelease --target "$RC7_COMMIT" --title 'WorkThread 1.0.0rc7 · 模型 API 与 WorkBuddy' --notes-file notes.md
+          gh release edit "$tag" --draft=false
+  public-web-update:
+    needs: publish
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ['1.0.0rc4', '1.0.0rc5', '1.0.0rc6']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - run: uv sync --frozen --python 3.13
+      - name: Update via public release in Chromium and verify retained data
+        run: |
+          $deps = Join-Path $env:RUNNER_TEMP 'browser'
+          npm install --prefix $deps --ignore-scripts --no-audit --no-fund playwright-core@1.56.1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:WT_QA_PLAYWRIGHT = Join-Path $deps 'node_modules/playwright-core'
+          $env:WT_QA_CHROME = Join-Path $env:ProgramFiles 'Google/Chrome/Application/chrome.exe'
+          uv run --frozen python scripts/qualify_release_update.py --from-version "${{ matrix.source }}" --commit $env:RC7_COMMIT

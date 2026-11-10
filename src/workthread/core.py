@@ -193,11 +193,11 @@ class Store:
     def db(self):
         with self.lock:
             c = sqlite3.connect(self.path, timeout=20)
-            c.row_factory = sqlite3.Row
-            c.execute("PRAGMA foreign_keys=ON")
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA synchronous=FULL")
             try:
+                c.row_factory = sqlite3.Row
+                c.execute("PRAGMA foreign_keys=ON")
+                c.execute("PRAGMA journal_mode=WAL")
+                c.execute("PRAGMA synchronous=FULL")
                 yield c
                 c.commit()
             except BaseException:

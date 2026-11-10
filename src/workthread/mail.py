@@ -14,6 +14,7 @@ import os
 import quopri
 import re
 import ssl
+import sqlite3
 import time
 from filelock import FileLock, Timeout
 from .core import Conflict, uid, now, dumps, digest, load
@@ -372,17 +373,52 @@ def imap_call(operation, *args, **kwargs):
         raise
 
 
+def sqlite_code(exc):
+    # Extended codes, e.g. SQLITE_BUSY_SNAPSHOT, share the low byte.
+    return getattr(exc, "sqlite_errorcode", 0) & 0xff
+
+
+def sqlite_sync_error(exc):
+    messages = {
+        sqlite3.SQLITE_BUSY: "本地数据库正忙，稍后可继续拉取",
+        sqlite3.SQLITE_LOCKED: "本地数据库被占用，稍后可继续拉取",
+        sqlite3.SQLITE_FULL: "数据库空间已满，请检查工作空间所在磁盘的可用空间",
+        sqlite3.SQLITE_READONLY: "数据库只读，请检查工作空间权限",
+        sqlite3.SQLITE_IOERR: "数据库读写失败，请检查工作空间所在磁盘",
+        sqlite3.SQLITE_CORRUPT: "数据库完整性异常，请先检查数据库再继续拉取",
+        sqlite3.SQLITE_NOTADB: "数据库格式异常，请先检查数据库再继续拉取",
+    }
+    label = messages.get(sqlite_code(exc), "本地数据库操作失败")
+    return f"{label}（{getattr(exc, 'sqlite_errorname', 'SQLite')}）"
+
+
+ACTIVE_SYNC_STATES = {"queued", "running", "reconnecting", "database_wait"}
+
+
+class SyncStopped(Exception):
+    pass
+
+
 class Sync:
     retry_delays = (1, 3, 8)
+    database_retry_delays = (2, 5, 15)
 
-    def __init__(self, store, client_factory=None):
+    def __init__(self, store, client_factory=None, stop=None):
         self.s = store
         self.archive = Archive(store)
         self.client_factory = client_factory
+        self.stop = stop
+
+    def _wait(self, seconds=0):
+        if self.stop is None:
+            if seconds:
+                time.sleep(seconds)
+        elif self.stop.wait(seconds):
+            raise SyncStopped()
 
     def _lock(self, account_id):
         return FileLock(
-            self.s.root / (".mail-sync-" + digest(account_id) + ".lock"), timeout=0
+            self.s.root / (".mail-sync-" + digest(account_id) + ".lock"), timeout=0, thread_local=False
         )
 
     @contextlib.contextmanager
@@ -409,12 +445,12 @@ class Sync:
                 "state": "interrupted" if state == "running" else state,
                 "folders": {},
             }
-        if status["state"] in ("running", "reconnecting"):
+        if status["state"] in ACTIVE_SYNC_STATES:
             try:
                 with self._lock(account_id):
                     # No owning process remains after an unclean exit.
                     status = self.s.setting("mail-sync:" + account_id) or status
-                    if status["state"] in ("running", "reconnecting"):
+                    if status["state"] in ACTIVE_SYNC_STATES:
                         status["state"] = "interrupted"
             except Timeout:
                 pass
@@ -546,7 +582,7 @@ class Sync:
             folders.append({"name": sent, "direction": "sent"})
         return folders
 
-    def _read_message(self, client, account_id, fid, validity, mailuid):
+    def _read_message(self, client, account_id, fid, validity, mailuid, progress):
         data = imap_call(
             client.fetch,
             [mailuid],
@@ -581,6 +617,7 @@ class Sync:
             "imap_uid": mailuid,
             "flags": [text(f) for f in data.get(b"FLAGS", [])],
         }
+        progress["stage"] = "归档邮件"
         self.archive.record(
             data[b"BODY[HEADER]"],
             decoded,
@@ -594,6 +631,12 @@ class Sync:
             "INSERT OR REPLACE INTO settings VALUES (?,?)",
             ("mail-sync:" + progress["account_id"], dumps(progress)),
         )
+
+        if progress["state"] not in ACTIVE_SYNC_STATES and progress.get("task_id"):
+            c.execute(
+                "INSERT OR REPLACE INTO settings VALUES (?,?)",
+                ("mail-task:" + progress["task_id"], dumps(progress)),
+            )
 
     def _folder(self, client, spec, progress, failures):
         name = spec["name"]
@@ -631,9 +674,12 @@ class Sync:
         with self.s.db() as c:
             self._save(c, progress)
         for mailuid in sorted(uids - archived - failures.keys()):
+            self._wait()
+            progress.update(stage="读取邮件", current_uid=mailuid)
             try:
-                self._read_message(client, account_id, fid, validity, mailuid)
+                self._read_message(client, account_id, fid, validity, mailuid, progress)
             except (ValueError, LookupError, MessageError) as exc:
+                progress["stage"] = "记录单封异常"
                 error = type(exc).__name__
                 failures[mailuid] = error
                 counts["errors"] += 1
@@ -644,6 +690,8 @@ class Sync:
                     )
                     self._save(c, progress)
             else:
+                progress["stage"] = "保存归档进度"
+                progress["attempt"] = 0
                 counts["archived"] += 1
                 with self.s.db() as c:
                     c.execute(
@@ -654,9 +702,20 @@ class Sync:
 
     def run(self, account_id):
         with self.exclusive(account_id):
-            return self._run(account_id)
+            return self.run_locked(account_id, uid())
 
-    def _run(self, account_id):
+    def run_locked(self, account_id, task_id):
+        for attempt in range(len(self.database_retry_delays) + 1):
+            can_retry = attempt < len(self.database_retry_delays)
+            try:
+                return self._run(account_id, task_id, can_retry)
+            except sqlite3.OperationalError as exc:
+                if not can_retry or sqlite_code(exc) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise
+                # Recover any prepared archives before listing missing UIDs.
+                self._wait(self.database_retry_delays[attempt])
+
+    def _run(self, account_id, task_id, can_retry_database):
         accounts = self.s.rows(
             "SELECT * FROM mail_accounts WHERE account_id=? AND host<>''", (account_id,)
         )
@@ -665,8 +724,10 @@ class Sync:
         account = accounts[0]
         previous = self.s.setting("mail-sync:" + account_id) or {}
         resuming = previous.get("state") in (
+            "queued",
             "running",
             "reconnecting",
+            "database_wait",
             "interrupted",
             "blocked",
             "failed",
@@ -674,6 +735,8 @@ class Sync:
         progress = {
             "account_id": account_id,
             "run_id": uid(),
+            "task_id": task_id,
+            "stage": "恢复归档记录",
             "state": "running",
             "attempt": 0,
             "folder": "",
@@ -694,9 +757,11 @@ class Sync:
         index = 0
         failures = {}
         try:
+            self._wait()
             self.archive.recover()
             while folders is None or index < len(folders):
                 try:
+                    self._wait()
                     if client is None:
                         client = self._connect(account)
                     if folders is None:
@@ -706,6 +771,7 @@ class Sync:
                             for spec in folders
                         }
                     spec = folders[index]
+                    progress.update(stage="核对文件夹清单", current_uid=None)
                     progress["folder"] = spec["name"]
                     self._folder(
                         client, spec, progress, failures.setdefault(spec["name"], {})
@@ -723,32 +789,41 @@ class Sync:
                     progress.update(state="reconnecting", attempt=attempt + 1)
                     with self.s.db() as c:
                         self._save(c, progress)
-                    time.sleep(self.retry_delays[attempt])
+                    self._wait(self.retry_delays[attempt])
             else:
                 progress["state"] = "partial" if any(failures.values()) or progress.get("sent_unresolved") else "completed"
+        except SyncStopped:
+            progress["state"] = "interrupted"
         except FolderChanged:
             progress["state"] = "blocked"
         except Exception as exc:
             progress.update(state="failed", error=type(exc).__name__)
+            if isinstance(exc, sqlite3.DatabaseError):
+                progress["error_detail"] = sqlite_sync_error(exc)
+                if can_retry_database and sqlite_code(exc) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    progress["state"] = "database_wait"
+            # If the database itself is unavailable, keep the original diagnostic.
+            with contextlib.suppress(sqlite3.Error, Timeout):
+                self._finish_run(progress, progress.get("error_detail", progress["error"]))
             raise
         finally:
-            errors = [
-                {"folder": name, "uid": n, "error": reason}
-                for name, items in failures.items()
-                for n, reason in items.items()
-            ]
-            with self.s.db() as c:
-                self._save(c, progress)
-                c.execute(
-                    "UPDATE sync_runs SET finished_at=?,state=?,error=? WHERE run_id=?",
-                    (
-                        now(),
-                        progress["state"],
-                        progress.get("error") or dumps(errors),
-                        progress["run_id"],
-                    ),
-                )
             if client is not None:
                 with contextlib.suppress(Exception):
                     client.logout()
+        errors = [
+            {"folder": name, "uid": n, "error": reason}
+            for name, items in failures.items()
+            for n, reason in items.items()
+        ]
+        progress.pop("current_uid", None)
+        progress.pop("stage", None)
+        self._finish_run(progress, dumps(errors))
         return {**progress, "errors": errors}
+
+    def _finish_run(self, progress, error):
+        with self.s.db() as c:
+            self._save(c, progress)
+            c.execute(
+                "UPDATE sync_runs SET finished_at=?,state=?,error=? WHERE run_id=?",
+                (now(), progress["state"], error, progress["run_id"]),
+            )

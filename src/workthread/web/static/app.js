@@ -179,7 +179,12 @@ function switchView(v) {
   if (v === 'todos') todoLane.view = 'list';
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   selected = null;
-  render()
+  if (v === 'mail' && mailSyncObserved) {
+    mailSyncObserved = false;
+    attempt(refresh)();
+  } else {
+    render();
+  }
 }
 
 function render() {
@@ -1325,8 +1330,10 @@ const runStates = {
 };
 
 const syncLabels = {
+  queued: ['任务已受理', '准备拉取…'],
   idle: ['尚未拉取', '开始拉取'],
   running: ['正在拉取', '正在拉取…'],
+  database_wait: ['本地数据库暂时被占用，稍后自动继续', '等待数据库…'],
   reconnecting: ['连接中断', '正在重连…'],
   interrupted: ['拉取已中断', '继续拉取（断点续传）'],
   blocked: ['文件夹标识已变化，旧断点已停用。请核对邮箱文件夹设置。', '续传已停用'],
@@ -1335,6 +1342,7 @@ const syncLabels = {
   failed: ['拉取失败，请检查邮箱配置和本机运行状态', '重新拉取']
 };
 let syncPollPending = false;
+let mailSyncObserved = false;
 const submittedSyncs = new Set();
 async function refreshMailProgress() {
   if (view !== 'settings' || settingsState.tab !== 'accounts' || syncPollPending) return;
@@ -1346,13 +1354,21 @@ async function refreshMailProgress() {
       if (!status) continue;
       const [label, action] = syncLabels[status.state] || syncLabels.failed;
       const lines = [label];
+      if (status.task_id) {
+        mailSyncObserved = true;
+        lines.push('任务编号 ' + status.task_id);
+      }
+      if (status.state === 'failed' && (status.error_detail || status.error)) {
+        lines.push([status.stage, status.current_uid ? 'UID '+status.current_uid : '',
+          status.error_detail || status.error].filter(Boolean).join(' · '));
+      }
       if (status.sent_unresolved) {
         if (status.state === 'partial') lines[0] = '本轮收件箱拉取结束';
         lines.push('已发送文件夹未能自动识别，请打开本邮箱的“文件夹设置”。');
       }
       if (status.sent_configured && status.state === 'partial') lines[0] = '文件夹设置已保存，可再次拉取';
       if (status.state === 'reconnecting') lines[0] += '，第 ' + status.attempt + ' 次自动重连';
-      if (status.folder && ['running','interrupted','reconnecting','blocked'].includes(status.state)) {
+      if (status.folder && ['running','interrupted','reconnecting','database_wait','failed','blocked'].includes(status.state)) {
         lines[0] += ' · ' + status.folder;
       }
       for (const [name, counts] of Object.entries(status.folders || {})) {
@@ -1365,7 +1381,7 @@ async function refreshMailProgress() {
       const message = lines.join('\n');
       if (target.textContent !== message) target.textContent = message;
       button.textContent = action;
-      button.disabled = submittedSyncs.has(id) || ['running','reconnecting','blocked'].includes(status.state);
+      button.disabled = submittedSyncs.has(id) || ['queued','running','reconnecting','database_wait','blocked'].includes(status.state);
     }
   } finally {
     syncPollPending = false;
@@ -1514,9 +1530,12 @@ function settingsView() {
     el.disabled = true;
     submittedSyncs.add(id);
     try {
-      const result = await api('/accounts/' + encodeURIComponent(id) + '/sync', 'POST', {});
-      toast(result.sent_unresolved && result.state === 'partial' ? '收件箱拉取结束，请选择已发送文件夹' : syncLabels[result.state][0]);
-      await refresh();
+      const key = 'mail-submit:' + id;
+      const requestId = sessionStorage.getItem(key) || crypto.randomUUID();
+      sessionStorage.setItem(key, requestId);
+      const task = await api('/accounts/' + encodeURIComponent(id) + '/sync-tasks', 'POST', {request_id: requestId});
+      sessionStorage.removeItem(key);
+      toast((syncLabels[task.state] || syncLabels.failed)[0] + ' · ' + task.task_id.slice(0, 8));
     } finally {
       submittedSyncs.delete(id);
       await refreshMailProgress();

@@ -2,11 +2,13 @@
 
 import hmac
 import secrets
+import sqlite3
+from uuid import UUID
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 import nh3
-from flask import Flask, request, jsonify, render_template, session, send_file
+from flask import Flask, request, jsonify, render_template, session, send_file, url_for
 from jsonschema import ValidationError
 from werkzeug.wsgi import ClosingIterator
 from .core import Conflict, DeadlineError, now, uid, dumps, load
@@ -15,7 +17,10 @@ from .ai import Bridge
 from .operations import backup, backup_filename, restore, import_legacy, undo_import
 
 
-def create_app(store, updates=None):
+def create_app(store, updates=None, mail_tasks=None):
+    from .mail_tasks import MailTasks
+
+    mail_tasks = mail_tasks or MailTasks(store)
     from .updating.controller import Updates
     updates = updates or Updates(None)
     app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
@@ -606,15 +611,40 @@ def create_app(store, updates=None):
             raise ValueError("合成邮箱使用固定的示例文件夹")
         return jsonify(Sync(store).folder_settings(aid, payload or None))
 
+    @app.post("/api/v1/accounts/<aid>/sync-tasks")
+    def start_mail_task(aid):
+        from .mail import ACTIVE_SYNC_STATES
+
+        payload = request.get_json() if request.is_json else {}
+        if not isinstance(payload, dict):
+            raise ValueError("拉取请求格式不正确")
+        request_id = payload.get("request_id")
+        if request_id is not None:
+            if not isinstance(request_id, str) or len(request_id) != 36:
+                raise ValueError("拉取请求编号格式不正确")
+            request_id = str(UUID(request_id))
+        task = mail_tasks.start(aid, request_id=request_id)
+        status = 202 if task["state"] in ACTIVE_SYNC_STATES else 200
+        return jsonify(task), status, {"Location": url_for("get_mail_task", aid=aid, task_id=task["task_id"])}
+
+    @app.get("/api/v1/accounts/<aid>/sync-tasks/<task_id>")
+    def get_mail_task(aid, task_id):
+        task = mail_tasks.get(aid, task_id)
+        return jsonify(task) if task else (jsonify(error="未找到拉取任务"), 404)
+
     @app.post("/api/v1/accounts/<aid>/sync")
     def sync(aid):
-        from .mail import Sync
+        from .mail import Sync, sqlite_sync_error
 
+        factory = None
         if aid == "demo":
             from .demo import FakeIMAP
 
-            return jsonify(Sync(store, lambda a: FakeIMAP()).run(aid))
-        return jsonify(Sync(store).run(aid))
+            factory = lambda _: FakeIMAP()
+        try:
+            return jsonify(Sync(store, factory, mail_tasks.stop).run(aid))
+        except sqlite3.DatabaseError as exc:
+            return jsonify(error=sqlite_sync_error(exc)), 500
 
     @app.post("/api/v1/backup")
     def download_backup():

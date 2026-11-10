@@ -379,6 +379,14 @@ def restore(s, path, apply=False):
                             )
                     s.audit(c, "todos_restored", None, {"count": len(data["todos"])})
                 return {"scope": "todos", "restored": True}
+            # The workspace write lock prevents new admissions while checking and
+            # replacing data. A mail job can hold its account lock between writes.
+            from .mail import Sync
+
+            sync = Sync(s)
+            for account in s.rows("SELECT account_id FROM mail_accounts WHERE host<>''"):
+                with sync.exclusive(account["account_id"]):
+                    pass
             rollback = s.root / ("restore-rollback-" + uid())
             rollback.mkdir()
             moved = []

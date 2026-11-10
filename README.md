@@ -6,11 +6,11 @@
 
 > 请按照 https://github.com/MelonTse/workthread 首页的 Windows 安装说明，在这台电脑上安装并配置 WorkThread。完成后打开工作台，并告诉我如何检查更新。
 
-[Windows 安装说明与推荐版本 v1.0.0rc7](docs/windows/FIRST_INSTALL.md) · Windows 10 22H2 / Windows 11 x64
+[Windows 安装说明与推荐版本 v1.0.0rc8](docs/windows/FIRST_INSTALL.md) · Windows 10 22H2 / Windows 11 x64
 
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；用户可通过 WorkBuddy 或自己配置的模型 API 生成和重写邮件草稿、录入与维护待办、整理客户知识。候选知识经用户确认后入库。
 
-Windows x64 发布候选版 **1.0.0rc7** 新增网页模型 API，保留 WorkBuddy 的队列模式。官方 rc4、rc5、rc6 用户可从「设置与运行状态 → 软件更新」保留本机数据升级。程序 ZIP 的 SHA-256 见 [v1.0.0rc7 发布页](https://github.com/MelonTse/workthread/releases/tag/v1.0.0rc7)。
+Windows x64 发布候选版 **1.0.0rc8** 支持在后台持续拉取邮件，关闭网页后仍可按任务编号查看进度。官方 rc4、rc5、rc6、rc7 用户可从「设置与运行状态 → 软件更新」保留本机数据升级。程序 ZIP 的 SHA-256 见 [v1.0.0rc8 发布页](https://github.com/MelonTse/workthread/releases/tag/v1.0.0rc8)。
 
 Windows Server 2022 上已自动验证两个历史 rc3 的升级和全新 rc4 的首次网页更新。Windows 10 19045、Windows 11 与 WorkBuddy 客户端的安装、Skills 发现及实际调用仍待桌面验收。
 
@@ -42,7 +42,8 @@ Windows Server 2022 上已自动验证两个历史 rc3 的升级和全新 rc4 �
 - 右下角“＋ To Do”或列表顶部“新增 To Do”直接打开完整表单；标题位于首行，填写后点击“保存”，窗口自动关闭。保存时保留原始输入、录入时点和工作时区。
 - To Do 默认打开详情，截止日期需填写或选择“无限期”；状态、优先级、负责人、关联对象和完成条件均可维护，原始输入保留。
 - 进展发生时间默认当前工作时区时间，可手动修改。同一事项可持续追加进展。状态不变不妨碍记录；错误日志通过“追加更正”留痕。
-- 在“设置与运行状态 → 邮箱”查看每个文件夹的已归档、待拉取和异常数量。断线后本轮最多自动重连三次；仍未连通时，可在网络恢复后点击“继续拉取（断点续传）”。刷新网页后仍可继续，已归档邮件跳过正文下载。服务器文件夹的 UIDVALIDITY 变化时会停用旧断点。
+- 在“设置与运行状态 → 邮箱”点击“开始拉取”，页面显示任务编号和各文件夹进度。服务运行期间可关闭网页；重新打开邮箱页可继续查看。服务停止或意外退出后，点击“继续拉取”沿用原任务编号，从已归档邮件之后的缺口继续。邮件文件夹的 UIDVALIDITY 变化时会停用旧断点。
+- WorkBuddy 可通过同源网页会话提交 `POST /api/v1/accounts/<aid>/sync-tasks`，使用页面的 CSRF 令牌。新任务返回 HTTP 202、`task_id` 和可查询的 `Location`。同一邮箱有任务进行时会返回该任务；可在 JSON 中传入 UUID 格式的 `request_id`，在提交回执丢失时使用同一编号重试。通过 `GET /api/v1/accounts/sync-status` 查看各邮箱当前任务，或 GET 回执的 `Location` 查询指定任务的状态。
 - 邮件页搜索历史与相关会话、查看分析建议、编辑和复制英文草稿、保存人工反馈。
 - 知识页按个人、客户、项目切换，并按对象查看与编辑。候选知识须确认；人工版本保留历史。
 - 选择 WorkBuddy 时，网页将任务加入队列，分析完成后由 Python 导入结果；选择模型 API 时，在网页提交即可调用已配置的模型。设置页的“导入模拟 AI 结果”仅适用于演示空间。

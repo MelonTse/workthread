@@ -9,8 +9,7 @@ from .ai import Bridge
 from .deployment import install_templates
 
 
-def worker(store, stop):
-    from .mail import Sync
+def worker(store, stop, mail_tasks):
 
     last = 0
     while not stop.wait(3):
@@ -23,7 +22,7 @@ def worker(store, stop):
                     "SELECT account_id FROM mail_accounts WHERE enabled=1"
                 ):
                     try:
-                        Sync(store).run(a["account_id"])
+                        mail_tasks.start(a["account_id"], scheduled=True)
                     except Exception as e:
                         with store.db() as c:
                             store.audit(
@@ -110,7 +109,10 @@ def main(argv=None):
 
         stop = threading.Event()
         updates = Updates(install_root(store.root), stop.set, a.port)
-        t = threading.Thread(target=worker, args=(store, stop), daemon=True)
+        from .mail_tasks import MailTasks
+
+        mail_tasks = MailTasks(store, stop)
+        t = threading.Thread(target=worker, args=(store, stop, mail_tasks), daemon=True)
         t.start()
         url = f"http://127.0.0.1:{a.port}"
         print("WorkThread " + url, flush=True)
@@ -118,7 +120,7 @@ def main(argv=None):
             threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         try:
             sockets = {}
-            server = create_server(create_app(store, updates), host="127.0.0.1", port=a.port, threads=6, map=sockets)
+            server = create_server(create_app(store, updates, mail_tasks), host="127.0.0.1", port=a.port, threads=6, map=sockets)
             try:
                 while not stop.is_set():
                     wasyncore.loop(timeout=0.2, count=1, map=sockets)
@@ -134,6 +136,7 @@ def main(argv=None):
                 wasyncore.close_all(map=sockets)
         finally:
             stop.set()
+            mail_tasks.close()
             t.join(timeout=None if updates.stopping else 35)
         return
     if a.command == "doctor":

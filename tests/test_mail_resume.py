@@ -280,3 +280,94 @@ def test_remove_mail_account_retains_archive_and_is_retryable(store, monkeypatch
     )
     assert http.post(route + "/sync", headers=headers).status_code == 400
     assert {t: store.rows("SELECT * FROM " + t) for t in tables} == original
+
+
+def test_separated_network_failures_get_fresh_budget_after_a_saved_mail(store):
+    first, second, last = DropDuringBody(), FakeIMAP(), FakeIMAP()
+    second.fail_uid = 3
+    sessions = iter([first, second, last])
+    sync = Sync(store, lambda _: next(sessions))
+    sync.retry_delays = (0,)
+    assert sync.run("demo")["state"] == "completed"
+    assert [uid for uid, parts in last.requests if parts == ["BODY.PEEK[1]"]] == [3]
+    assert len(store.rows("SELECT * FROM archive_commits")) == 3
+
+
+def test_sqlite_busy_after_jsonl_append_recovers_without_duplicate(store, monkeypatch):
+    import json
+    import sqlite3
+    from workthread.mail import Archive
+
+    original = Archive._finish
+    faults = []
+
+    def finish(archive, conn, tx, payload):
+        if not faults and payload["occurrence"]["imap_uid"] == 2:
+            with sqlite3.connect(store.path) as blocker:
+                blocker.execute("BEGIN IMMEDIATE")
+                conn.execute("PRAGMA busy_timeout=0")
+                try:
+                    return original(archive, conn, tx, payload)
+                except sqlite3.OperationalError as exc:
+                    faults.append(exc.sqlite_errorcode)
+                    raise
+        return original(archive, conn, tx, payload)
+
+    monkeypatch.setattr(Archive, "_finish", finish)
+    monkeypatch.setattr(Sync, "database_retry_delays", (0,))
+    http, headers = client(store)
+    response = http.post("/api/v1/accounts/demo/sync", headers=headers)
+    assert response.status_code == 200
+    assert response.get_json()["state"] == "completed"
+    assert faults == [sqlite3.SQLITE_BUSY]
+    assert len(store.rows("SELECT * FROM mail_occurrences")) == 3
+    assert [r["state"] for r in store.rows("SELECT state FROM sync_runs ORDER BY rowid")] == [
+        "database_wait", "completed"
+    ]
+    commits = store.rows("SELECT tx_id FROM archive_commits WHERE state='committed'")
+    assert len(commits) == 3
+    for part in ("meta", "body"):
+        ids = [json.loads(line)["archive_tx_id"]
+               for file in (store.data / part).glob("*.jsonl")
+               for line in file.read_text(encoding="utf-8").splitlines()]
+        assert sorted(ids) == sorted(r["tx_id"] for r in commits)
+
+
+def test_readonly_database_reports_sqlite_code_and_uid_without_retry(store, monkeypatch):
+    from workthread.mail import Archive
+
+    original = Archive._finish
+    def readonly(archive, conn, tx, payload):
+        conn.execute("PRAGMA query_only=ON")
+        return original(archive, conn, tx, payload)
+
+    monkeypatch.setattr(Archive, "_finish", readonly)
+    http, headers = client(store)
+    response = http.post("/api/v1/accounts/demo/sync", headers=headers)
+    assert response.status_code == 500 and "SQLITE_READONLY" in response.get_json()["error"]
+    status = http.get("/api/v1/accounts/sync-status").get_json()["demo"]
+    assert status["state"] == "failed" and "只读" in status["error_detail"]
+    assert (status["stage"], status["folder"], status["current_uid"]) == ("归档邮件", "INBOX", 1)
+    assert len(store.rows("SELECT * FROM sync_runs")) == 1
+
+
+def test_persistent_sqlite_contention_stops_after_budget(store, monkeypatch):
+    import sqlite3
+    from workthread.mail import Archive
+
+    original = Archive._finish
+
+    def busy(archive, conn, tx, payload):
+        with sqlite3.connect(store.path) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            conn.execute("PRAGMA busy_timeout=0")
+            return original(archive, conn, tx, payload)
+
+    monkeypatch.setattr(Archive, "_finish", busy)
+    monkeypatch.setattr(Sync, "database_retry_delays", (0, 0))
+    http, headers = client(store)
+    response = http.post("/api/v1/accounts/demo/sync", headers=headers)
+    assert response.status_code == 500 and "SQLITE_BUSY" in response.get_json()["error"]
+    assert http.get("/api/v1/accounts/sync-status").get_json()["demo"]["state"] == "failed"
+    assert len(store.rows("SELECT * FROM sync_runs")) == 3
+    assert not store.rows("SELECT * FROM mail_occurrences")

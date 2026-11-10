@@ -27,6 +27,10 @@ OLD = {
         "528592c0993ccef92fb3d7689c4a4499ba083883",
         "b5e16ec5c29adac1c06df869d5c73fae479528378a812cd198425afb510db890",
     ),
+    "1.0.0rc6": (
+        "e788a375072adc63606937f162ab5feae8b00e10",
+        "3daed3e822dc93a7012e988e5b6dd952057aa2786030ca6adceff0a69524219d",
+    ),
 }
 
 

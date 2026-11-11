@@ -1256,7 +1256,7 @@ function openKnowledgeEditor(item = null) {
 }
 
 const settingsState = {
-  tab: sessionStorage.getItem('workthread-settings-tab') === 'accounts' ? 'accounts' : 'runtime'
+  tab: ['accounts','update'].includes(sessionStorage.getItem('workthread-settings-tab')) ? sessionStorage.getItem('workthread-settings-tab') : 'runtime'
 };
 function updateCard() {
   return card('软件更新','<div class="card-body stack"><div id="update-status" class="prewrap" role="status"></div><div id="update-actions" class="button-row"></div></div>');
@@ -1269,7 +1269,8 @@ async function showSoftwareUpdate() {
     if (r.last) lines.push(r.last.error ? '上次更新失败：'+r.last.error : '已更新至 '+r.last.version);
     if (r.transaction === 'rolled-back') lines.push('原版本与工作空间已恢复。');
     if (r.offer) lines.push('可用版本：'+r.offer.version, r.offer.notes);
-    else if (checked) lines.push('暂无适用于此安装的已发布更新。');
+    else if (checked || r.check_message) lines.push(r.check_message || '已成功检查，暂无适用于此安装的已发布更新。');
+    if (r.last_error) lines.push(r.last_error.operation+'失败 · '+date(r.last_error.time), r.last_error.message, '诊断编号 '+r.last_error.reference);
     if (!r.enabled) lines.push('请在 Windows 正式工作空间中检查更新。');
     status.textContent = lines.filter(Boolean).join('\n');
     const button = (label, operation) => {
@@ -1297,8 +1298,14 @@ async function showSoftwareUpdate() {
             } catch (_) { /* detached updater owns the install lock */ }
           }, 2000);
         } catch (err) {
-          paint(operation === 'check' ? {...r, offer: null, ready: false} : r);
-          status.textContent += '\n'+err.message;
+          try {
+            const latest = await api('/software-update');
+            paint(latest);
+            if (!latest.last_error) status.textContent += '\n'+err.message;
+          } catch (_) {
+            paint({...r, last_error: null, check_message: null, ...(operation === 'check' ? {offer:null, ready:false} : {})});
+            status.textContent += '\n'+err.message;
+          }
         }
       };
       actions.append(b);
@@ -1334,12 +1341,12 @@ const syncLabels = {
   idle: ['尚未拉取', '开始拉取'],
   running: ['正在拉取', '正在拉取…'],
   database_wait: ['本地数据库暂时被占用，稍后自动继续', '等待数据库…'],
-  reconnecting: ['连接中断', '正在重连…'],
+  reconnecting: ['邮箱连接未完成，正在尝试恢复', '正在重连…'],
   interrupted: ['拉取已中断', '继续拉取（断点续传）'],
   blocked: ['文件夹标识已变化，旧断点已停用。请核对邮箱文件夹设置。', '续传已停用'],
   completed: ['本轮拉取完成', '检查新邮件'],
   partial: ['本轮结束，有邮件异常', '再次拉取'],
-  failed: ['拉取失败，请检查邮箱配置和本机运行状态', '重新拉取']
+  failed: ['拉取失败，请按下方原因处理后重试', '重新拉取']
 };
 let syncPollPending = false;
 let mailSyncObserved = false;
@@ -1358,10 +1365,14 @@ async function refreshMailProgress() {
         mailSyncObserved = true;
         lines.push('任务编号 ' + status.task_id);
       }
-      if (status.state === 'failed' && (status.error_detail || status.error)) {
+      if (['failed','interrupted','reconnecting','database_wait','blocked'].includes(status.state) && (status.error_detail || status.error)) {
         lines.push([status.stage, status.current_uid ? 'UID '+status.current_uid : '',
           status.error_detail || status.error].filter(Boolean).join(' · '));
       }
+      for (const failure of (status.message_errors || []).slice(-5)) {
+        lines.push('单封邮件异常 · '+failure.folder+' · UID '+failure.uid+' · '+failure.detail);
+      }
+      if ((status.message_errors || []).length > 5) lines.push('此处显示最近 5 条单封异常，完整近期记录保存在该任务状态中。');
       if (status.sent_unresolved) {
         if (status.state === 'partial') lines[0] = '本轮收件箱拉取结束';
         lines.push('已发送文件夹未能自动识别，请打开本邮箱的“文件夹设置”。');

@@ -6,7 +6,7 @@ import threading
 from filelock import Timeout
 
 from .core import Conflict, dumps, uid
-from .mail import ACTIVE_SYNC_STATES, Sync, SyncStopped, sqlite_sync_error
+from .mail import ACTIVE_SYNC_STATES, Sync, SyncStopped, sqlite_sync_error, mail_error
 
 
 class MailTasks:
@@ -99,9 +99,9 @@ class MailTasks:
                 status = self.store.setting(key) or task.copy()
                 if status["state"] in ACTIVE_SYNC_STATES:
                     if isinstance(exc, SyncStopped):
-                        status["state"] = "interrupted"
+                        status.update(state="interrupted", error_detail="工作台已停止拉取，重新启动后可从已归档断点继续")
                     else:
-                        status.update(state="failed", error=type(exc).__name__)
+                        status.update(state="failed", error=type(exc).__name__, error_detail=mail_error(exc, status.get("stage", "")))
                         if isinstance(exc, sqlite3.DatabaseError):
                             status["error_detail"] = sqlite_sync_error(exc)
                     with self.store.db() as c:

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
+from ..diagnostics import describe_error
 from . import releases as rel
 from . import transaction as tx
 
@@ -51,6 +52,13 @@ class Updates:
         self.offer = None
         self.ready = False
         self.stopping = False
+        self.checked = False
+        self.last_error = None
+        if root:
+            with contextlib.suppress(OSError, ValueError):
+                saved = rel.read(root / tx.STATE / "request-error.json")
+                if isinstance(saved, dict) and all(isinstance(saved.get(k), str) for k in ("operation", "time", "message", "reference")):
+                    self.last_error = saved
 
     def status(self):
         from .. import __version__
@@ -69,6 +77,12 @@ class Updates:
             if self.offer
             else None,
             "ready": self.ready,
+            "last_error": self.last_error,
+            "check_message": (
+                "已成功读取发布列表，未找到版本更高且签名清单允许当前安装构建升级的版本。"
+                "请核对当前版本和安装来源；预发布版本仅向候选版用户提供。"
+                if self.checked and not self.offer else None
+            ),
         }
 
     def action(self, name, confirmed=False):
@@ -85,7 +99,9 @@ class Updates:
             if name == "check":
                 self.ready = False
                 self.offer = None
+                self.checked = False
                 self.offer = rel.discover(current, rel.trust())
+                self.checked = True
             elif name == "download" and self.offer:
                 self.ready = False
                 doc = self.offer["doc"].encode()
@@ -165,7 +181,21 @@ class Updates:
                 self.stop()
             else:
                 raise ValueError("请先检查、下载，并确认停写后再更新")
+            self.last_error = None
+            with contextlib.suppress(OSError):
+                (root / tx.STATE / "request-error.json").unlink(missing_ok=True)
             return self.status()
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, ValueError) else describe_error(exc)
+            self.last_error = {
+                "operation": {"check": "检查更新", "download": "下载并检查", "apply": "备份并重启更新"}.get(name, "软件更新"),
+                "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "message": message,
+                "reference": uuid.uuid4().hex,
+            }
+            with contextlib.suppress(OSError):
+                rel.save(self.root / tx.STATE / "request-error.json", self.last_error)
+            raise ValueError(message + "。诊断编号 " + self.last_error["reference"]) from exc
         finally:
             self.lock.release()
 

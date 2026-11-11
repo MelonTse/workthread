@@ -80,8 +80,12 @@ def create_app(store, updates=None, mail_tasks=None, instance_id=None):
 
         if isinstance(e, HTTPException):
             return e
-        app.logger.error("operation failed: %s", type(e).__name__)
-        return jsonify(error="操作失败：" + type(e).__name__ + "；原数据已保留"), 500
+        from .diagnostics import describe_error
+
+        reference = uid()
+        detail = describe_error(e)
+        app.logger.error("diagnostic %s: %s %s", reference, type(e).__name__, detail)
+        return jsonify(error=f"操作失败：{detail}。诊断编号 {reference}", diagnostic_id=reference), 500
 
     @app.get("/")
     def home():

@@ -8,10 +8,10 @@ import ntpath
 import os
 import re
 import shutil
-import socket
-import ssl
 import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -19,6 +19,8 @@ from pathlib import Path
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from packaging.version import Version
+
+from ..diagnostics import describe_error
 
 REPO = "MelonTse/workthread"
 RC3 = frozenset(
@@ -94,8 +96,14 @@ def signed(document, sig, key, current):
     try:
         key.verify(base64.b64decode(sig, validate=True), document)
     except (ValueError, InvalidSignature) as e:
-        raise ValueError("发布签名无效") from e
-    m = json.loads(document)
+        raise ValueError("发布签名无效，已停止更新。请重新下载官方 update.json 和 update.sig；仍失败时联系维护者，不要跳过验签") from e
+    try:
+        m = json.loads(document)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("发布清单 update.json 不是有效 JSON，请重新检查更新并联系维护者核对发布文件") from exc
+    if (not isinstance(m, dict) or any(not isinstance(m.get(k), str) for k in ("version", "commit_sha", "sha256"))
+            or not isinstance(m.get("sources"), list) or type(m.get("size")) is not int):
+        raise ValueError("发布清单 update.json 字段缺失或类型错误，请联系维护者核对签名发布清单")
     v = m["version"]
     if (
         version(v) <= version(current["version"])
@@ -122,66 +130,66 @@ def fetch(url, limit, out=None):
     if url.startswith("https://api.github.com/"):
         stage = "检查 GitHub 版本列表"
 
-    def connection_error(exc):
-        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-        if isinstance(exc, urllib.error.HTTPError):
-            detail = f"GitHub 返回 HTTP {exc.code}，请稍后重试"
-        elif isinstance(reason, ssl.SSLCertVerificationError):
-            detail = "证书验证失败，请检查系统时间及代理证书"
-        elif isinstance(reason, socket.gaierror):
-            detail = "域名解析失败，请检查 DNS 和代理设置"
-        elif isinstance(reason, TimeoutError):
-            detail = "连接或读取超时，请稍后重试"
-        else:
-            detail = "连接中断或无法访问 GitHub，请检查网络和系统代理后重试"
-        return ValueError(f"{stage}失败：{detail}")
-
-    # Retry only before receiving a body. Never append a restarted download
-    # to a partially written ZIP or retry a certificate verification failure.
+    item = "Windows ZIP" if out is not None else "版本列表"
+    for name in ("update.json", "update.sig"):
+        if urllib.parse.urlsplit(url).path.endswith("/" + name):
+            item = name
+    # Each metadata retry starts from the original URL and uses a fresh response.
     for attempt in range(2):
+        host = urllib.parse.urlsplit(url).hostname
+        phase, received = "连接或等待响应头", 0
         try:
             response = urllib.request.urlopen(req, timeout=40)
-            break
-        except OSError as exc:
-            reason = getattr(exc, "reason", exc)
-            transient = isinstance(reason, (TimeoutError, ConnectionResetError))
+            with response:
+                if not response.geturl().startswith("https://"):
+                    raise ValueError("拒绝非 HTTPS 下载")
+                host = urllib.parse.urlsplit(response.geturl()).hostname
+                phase = "读取响应内容"
+                if out is None:
+                    data = response.read(limit + 1)
+                    received = len(data)
+                    if received > limit:
+                        raise ValueError("发布元数据过大")
+                    length = getattr(response, "headers", {}).get("Content-Length", "")
+                    if length.isdigit() and received < int(length):
+                        raise http.client.IncompleteRead(b"", int(length) - received)
+                    return data
+                while chunk := response.read(1024 * 1024):
+                    received += len(chunk)
+                    if received > limit:
+                        raise ValueError("下载超出声明大小")
+                    phase = "保存下载文件"
+                    out.write(chunk)
+                    phase = "读取响应内容"
+                return
+        except (OSError, http.client.HTTPException) as exc:
+            reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+            transient = isinstance(reason, (TimeoutError, ConnectionError, http.client.IncompleteRead))
             if isinstance(exc, urllib.error.HTTPError):
                 transient = exc.code in (502, 503, 504)
                 exc.close()
-            if attempt or not transient:
-                raise connection_error(exc) from exc
-
-    def read_chunk(size):
-        try:
-            return response.read(size)
-        except (OSError, http.client.IncompleteRead) as exc:
-            raise connection_error(exc) from exc
-
-    with response:
-        if not response.geturl().startswith("https://"):
-            raise ValueError("拒绝非 HTTPS 下载")
-        if out is None:
-            data = read_chunk(limit + 1)
-            if len(data) > limit:
-                raise ValueError("发布元数据过大")
-            return data
-        size = 0
-        while chunk := read_chunk(1024 * 1024):
-            size += len(chunk)
-            if size > limit:
-                raise ValueError("下载超出声明大小")
-            out.write(chunk)
+            retry = transient and attempt == 0 and (out is None or phase == "连接或等待响应头")
+            if retry:
+                time.sleep(0.3)
+                continue
+            raise ValueError(
+                f"{stage}失败（{item}，{host}，{phase}，尝试 {attempt + 1} 次，已接收 {received} 字节）："
+                f"{describe_error(exc)}。错误类型 {type(reason).__name__}"
+            ) from exc
 
 
 def discover(current, key):
     choices = []
     for page in range(1, 11):
-        rows = json.loads(
-            fetch(
+        try:
+            rows = json.loads(fetch(
                 f"https://api.github.com/repos/{REPO}/releases?per_page=30&page={page}",
                 8 * 1024**2,
-            )
-        )
+            ))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("GitHub 版本列表不是有效 JSON，请检查代理是否返回了登录页或拦截页，再重新检查更新") from exc
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise ValueError("GitHub 版本列表结构不正确，请稍后重试并检查代理响应")
         for row in rows:
             tag = row["tag_name"]
             try:
@@ -230,7 +238,7 @@ def discover(current, key):
 
 def verify_zip(path, m):
     if path.stat().st_size != m["size"] or digest(path) != m["sha256"]:
-        raise ValueError("安装包大小或 SHA-256 不匹配")
+        raise ValueError(f"安装包大小或 SHA-256 不匹配（实际 {path.stat().st_size} 字节，声明 {m['size']} 字节），已停止更新。文件可能未完整下载或内容已变化，请重新下载官方安装包，不要强制安装")
 
 
 def extract(path, dest, m):

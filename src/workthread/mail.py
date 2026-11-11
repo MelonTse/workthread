@@ -18,6 +18,7 @@ import sqlite3
 import time
 from filelock import FileLock, Timeout
 from .core import Conflict, uid, now, dumps, digest, load
+from .diagnostics import describe_error
 
 
 class UnsafeMime(ValueError):
@@ -379,17 +380,34 @@ def sqlite_code(exc):
 
 
 def sqlite_sync_error(exc):
-    messages = {
-        sqlite3.SQLITE_BUSY: "本地数据库正忙，稍后可继续拉取",
-        sqlite3.SQLITE_LOCKED: "本地数据库被占用，稍后可继续拉取",
-        sqlite3.SQLITE_FULL: "数据库空间已满，请检查工作空间所在磁盘的可用空间",
-        sqlite3.SQLITE_READONLY: "数据库只读，请检查工作空间权限",
-        sqlite3.SQLITE_IOERR: "数据库读写失败，请检查工作空间所在磁盘",
-        sqlite3.SQLITE_CORRUPT: "数据库完整性异常，请先检查数据库再继续拉取",
-        sqlite3.SQLITE_NOTADB: "数据库格式异常，请先检查数据库再继续拉取",
-    }
-    label = messages.get(sqlite_code(exc), "本地数据库操作失败")
-    return f"{label}（{getattr(exc, 'sqlite_errorname', 'SQLite')}）"
+    return describe_error(exc)
+
+
+def mail_error(exc, stage=""):
+    if isinstance(exc, SessionLost):
+        exc = exc.__cause__ or exc
+    if isinstance(exc, imaplib.IMAP4.abort):
+        return "邮箱服务器终止了 IMAP 会话，请检查网络稳定性和邮箱连接数限制"
+    if isinstance(exc, imaplib.IMAP4.error):
+        if stage == "登录邮箱":
+            return "邮箱服务器拒绝登录，请核对账号和授权码，并确认邮箱已启用 IMAP 及允许当前设备登录"
+        return "邮箱服务器拒绝当前 IMAP 操作，请核对文件夹是否存在、访问权限及服务器使用限制"
+    if isinstance(exc, FolderChanged):
+        return "服务器文件夹标识 UIDVALIDITY 已变化，原断点已停用。请在文件夹设置中核对后重新拉取"
+    if isinstance(exc, UnsafeMime):
+        hints = {
+            "missing BODYSTRUCTURE": "服务器未返回邮件正文结构",
+            "unsupported body transfer encoding": "邮件使用了尚不支持的正文传输编码",
+            "body charset needs review": "邮件正文字符集无法正确解码",
+            "no permitted body; inspect MIME structure manually": "邮件未提供可提取的纯文本或 HTML 正文",
+            "missing requested body section": "服务器未返回所请求的正文片段",
+        }
+        return hints.get(str(exc), "邮件 MIME 结构或长度不符合可安全解析的格式") + "，请在原邮箱查看该邮件并联系维护者核对解析支持"
+    if isinstance(exc, ValueError) and str(exc) == "请在本机凭证库重新授权邮箱":
+        return "本机凭证库没有可用的邮箱授权码，请重新保存邮箱凭据后拉取"
+    if isinstance(exc, (LookupError, MessageError)):
+        return "邮件字段缺失或格式无法解析，请根据文件夹及 UID 在原邮箱定位该邮件"
+    return describe_error(exc)
 
 
 ACTIVE_SYNC_STATES = {"queued", "running", "reconnecting", "database_wait"}
@@ -452,11 +470,12 @@ class Sync:
                     status = self.s.setting("mail-sync:" + account_id) or status
                     if status["state"] in ACTIVE_SYNC_STATES:
                         status["state"] = "interrupted"
+                        status["error_detail"] = "原拉取进程已退出，已归档断点可继续使用，请点击继续拉取"
             except Timeout:
                 pass
         return status
 
-    def _connect(self, account):
+    def _connect(self, account, progress=None):
         if self.client_factory:
             return imap_call(self.client_factory, account)
         import keyring
@@ -474,6 +493,8 @@ class Sync:
             timeout=30,
         )
         try:
+            if progress is not None:
+                progress["stage"] = "登录邮箱"
             imap_call(client.login, account["username"], password)
         except Exception:
             with contextlib.suppress(Exception):
@@ -682,6 +703,9 @@ class Sync:
                 progress["stage"] = "记录单封异常"
                 error = type(exc).__name__
                 failures[mailuid] = error
+                recent = progress.setdefault("message_errors", [])
+                recent.append({"folder": name, "uid": mailuid, "detail": mail_error(exc)})
+                del recent[:-20]
                 counts["errors"] += 1
                 with self.s.db() as c:
                     c.execute(
@@ -763,8 +787,10 @@ class Sync:
                 try:
                     self._wait()
                     if client is None:
-                        client = self._connect(account)
+                        progress["stage"] = "连接邮箱"
+                        client = self._connect(account, progress)
                     if folders is None:
+                        progress["stage"] = "读取文件夹列表"
                         folders = self._folders(account, client, progress)
                         progress["folders"] = {
                             spec["name"]: progress["folders"].get(spec["name"])
@@ -777,7 +803,8 @@ class Sync:
                         client, spec, progress, failures.setdefault(spec["name"], {})
                     )
                     index += 1
-                except SessionLost:
+                except SessionLost as exc:
+                    progress["error_detail"] = mail_error(exc, progress.get("stage", ""))
                     if client is not None:
                         with contextlib.suppress(Exception):
                             client.shutdown()
@@ -785,6 +812,7 @@ class Sync:
                     attempt = progress["attempt"]
                     if attempt == len(self.retry_delays):
                         progress["state"] = "interrupted"
+                        progress["error_detail"] += f"。已自动重连 {attempt} 次仍未恢复，检查连接后可继续拉取"
                         break
                     progress.update(state="reconnecting", attempt=attempt + 1)
                     with self.s.db() as c:
@@ -793,11 +821,11 @@ class Sync:
             else:
                 progress["state"] = "partial" if any(failures.values()) or progress.get("sent_unresolved") else "completed"
         except SyncStopped:
-            progress["state"] = "interrupted"
-        except FolderChanged:
-            progress["state"] = "blocked"
+            progress.update(state="interrupted", error_detail="工作台正在退出，拉取已停止；重新启动后可从已归档断点继续")
+        except FolderChanged as exc:
+            progress.update(state="blocked", error_detail=mail_error(exc))
         except Exception as exc:
-            progress.update(state="failed", error=type(exc).__name__)
+            progress.update(state="failed", error=type(exc).__name__, error_detail=mail_error(exc, progress.get("stage", "")))
             if isinstance(exc, sqlite3.DatabaseError):
                 progress["error_detail"] = sqlite_sync_error(exc)
                 if can_retry_database and sqlite_code(exc) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
@@ -815,8 +843,10 @@ class Sync:
             for name, items in failures.items()
             for n, reason in items.items()
         ]
-        progress.pop("current_uid", None)
-        progress.pop("stage", None)
+        if progress["state"] in ("completed", "partial"):
+            progress.pop("current_uid", None)
+            progress.pop("stage", None)
+            progress.pop("error_detail", None)
         self._finish_run(progress, dumps(errors))
         return {**progress, "errors": errors}
 

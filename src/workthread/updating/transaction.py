@@ -450,7 +450,7 @@ def apply(
             snapshot = tx / "snapshot" / name
             copy_workspace(live, snapshot)
             if catalog(snapshot) != before[name]:
-                raise ValueError("快照内容已变化")
+                raise ValueError(f"{name} 快照内容已变化：复制结果与复制前清单不一致，已停止切换。可能仍有程序写入或复制异常；请关闭 WorkBuddy 和其他工作台后重试，仍失败时保留现场交给维护者检查")
             trial = tx / "trial" / name
             flush_tree(snapshot)
             copy_workspace(snapshot, trial)

@@ -216,9 +216,25 @@ def main():
                         "powershell.exe",
                         "-NoProfile",
                         "-Command",
-                        "Get-Process WorkThread -ErrorAction SilentlyContinue | Where-Object { $_.Path.StartsWith($env:WT_QA_ROOT) } | Stop-Process -Force",
+                        r"""$ErrorActionPreference='Stop'
+# The fixed launcher can expose an 8.3 profile path. Match only this test's
+# unique temporary directory suffix in command lines, not a long-path prefix.
+function Owned {
+  @(Get-CimInstance Win32_Process -Filter "Name='WorkThread.exe'" | Where-Object {
+    $_.CommandLine -and $_.CommandLine.Contains($env:WT_QA_ID)
+  })
+}
+$owned = @(Owned)
+if ($owned.Count -eq 0) { throw 'Synthetic HTTP service process was not identified' }
+$owned | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+for ($i=0; $i -lt 50; $i++) {
+  if (@(Owned).Count -eq 0) { exit 0 }
+  Start-Sleep -Milliseconds 200
+}
+throw 'Synthetic processes still running'
+""",
                     ],
-                    env=dict(os.environ, WT_QA_ROOT=str(root)),
+                    env=dict(os.environ, WT_QA_ID=temp.name.rsplit(" ", 1)[-1]),
                     check=True,
                 )
                 proc.wait(30)

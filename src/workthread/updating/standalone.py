@@ -284,10 +284,25 @@ def apply_verified(
             check(bundle, trial, logical)
 
     try:
+        for name in ("result.json", "request-error.json"):
+            previous = tx.safe(root / tx.STATE / name)
+            if previous.is_file():
+                evidence.save("previous-" + name, rel.read(previous))
         # Only this single-purpose process uses the patched copy implementation.
         tx.copy_workspace = copier
         evidence.event("开始停写检查、快照及版本切换")
         result = tx.apply(root, *inputs, quiet=quiet, check=probe, hook=hook)
+        # Publish the committed outcome to the existing settings page. Keep old
+        # errors in this tool's diagnostics rather than showing them as current.
+        try:
+            rel.save(root / tx.STATE / "result.json", result)
+            previous_request = tx.safe(root / tx.STATE / "request-error.json")
+            if previous_request.is_file():
+                rel.save(previous_request, {})
+        except OSError:
+            evidence.event(
+                "版本已经提交，但网页结果提示未能更新；以本次日志和实际版本为准"
+            )
         evidence.event("SUCCESS：版本已切换，两个工作空间健康检查通过")
         evidence.save("result.json", {"success": True, **result})
         return result

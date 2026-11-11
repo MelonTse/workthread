@@ -4,6 +4,7 @@ import pytest
 from test_updates import check, records
 from test_updates import setup as setup  # noqa: PLC0414 - pytest fixture registration
 
+from workthread.updating import releases as rel
 from workthread.updating import standalone as helper
 from workthread.updating import transaction as tx
 
@@ -59,6 +60,23 @@ def test_all_records_and_custom_files_preserved(setup, tmp_path):
     )
     assert records(root) == before
     assert len(list(e.directory.glob("copy-*/comparison.json"))) == 4
+
+
+def test_old_failure_result_archived_and_settings_updated(setup, tmp_path):
+    root, inputs = setup
+    previous = {"error": "synthetic previous snapshot failure"}
+    rel.save(root / tx.STATE / "result.json", previous)
+    rel.save(root / tx.STATE / "request-error.json", {"message": "old network failure"})
+    empty = root / tx.STATE / "transactions" / ("a" * 32) / "snapshot/workspace"
+    empty.mkdir(parents=True)
+    e = helper.Evidence(tmp_path / "evidence")
+    helper.apply_verified(
+        root, inputs, e, execute=copy_ok, quiet=lambda: None, check=check
+    )
+    assert rel.read(e.directory / "previous-result.json") == previous
+    assert rel.read(root / tx.STATE / "result.json")["version"] == "1.0.0rc4"
+    assert rel.read(root / tx.STATE / "request-error.json") == {}
+    assert empty.is_dir() and not list(empty.iterdir())
 
 
 @pytest.mark.parametrize(

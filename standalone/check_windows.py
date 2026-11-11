@@ -159,8 +159,21 @@ def main():
                     f.write("synthetic ADS")
             return root
 
-        for mode in ("console", "detached"):
+        for mode in ("console", "detached", "prior-failed-update"):
             root = fresh("用户 " + mode)
+            if mode == "prior-failed-update":
+                state = root / tx.STATE
+                shutil.copytree(root / "app", state / "bootstrap")
+                old_snapshot = (
+                    state / "transactions" / ("a" * 32) / "snapshot/workspace"
+                )
+                old_snapshot.mkdir(parents=True)
+                rel.save(state / "result.json", {"error": "快照内容已变化"})
+                rel.save(
+                    state / "request-error.json",
+                    {"message": "synthetic old HTTP failure"},
+                )
+                prior_bootstrap = rel.digest(state / "bootstrap/WorkThread.exe")
             before = records(root)
             run(tool, root, assets, out / (mode + "-inspect"), "--inspect")
             assert records(root) == before
@@ -174,6 +187,15 @@ def main():
             )
             assert tx.current(root)[1]["commit_sha"] == helper.TARGET
             assert records(root) == before
+            assert rel.read(root / tx.STATE / "result.json")["version"] == "1.0.0rc9"
+            if mode == "prior-failed-update":
+                assert old_snapshot.is_dir() and not list(old_snapshot.iterdir())
+                assert rel.digest(state / "bootstrap/WorkThread.exe") == prior_bootstrap
+                assert rel.read(state / "request-error.json") == {}
+                previous = next(
+                    (out / (mode + "-apply")).glob("*/previous-result.json")
+                )
+                assert rel.read(previous)["error"] == "快照内容已变化"
             for n in tx.SPACES:
                 assert (
                     root / n / "agent-workspace/local.md:synthetic-stream"

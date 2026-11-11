@@ -301,7 +301,11 @@ throw 'Synthetic processes still running'
                         str(out / (kind + "-fault")),
                         str(ROOT / "packaging/release-public.hex"),
                     ],
-                    env=dict(os.environ, PYTHONPATH=str(ROOT / "src")),
+                    env=dict(
+                        os.environ,
+                        PYTHONPATH=str(ROOT / "src"),
+                        PYTHONIOENCODING="utf-8",
+                    ),
                     timeout=300,
                     check=False,
                 )

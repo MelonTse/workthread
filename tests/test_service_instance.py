@@ -156,15 +156,19 @@ def test_startup_failure_releases_instance_lock(tmp_path, launch):
     assert proc.poll() is None
 
 
-def test_clean_exit_removes_identity_and_keeps_lock_file(tmp_path):
+def test_clean_exit_removes_identity_and_allows_exclusive_restart(tmp_path):
+    from filelock import FileLock, Timeout
+
     with ServiceInstance(tmp_path, 0) as service:
         service.ready()
         port = service.port
         assert service.record.exists()
     assert not service.record.exists()
-    assert (tmp_path / ".workthread-service.lock").exists()
     with ServiceInstance(tmp_path, port) as restarted:
         assert restarted.socket is not None
+        with pytest.raises(Timeout):
+            with FileLock(str(tmp_path / ".workthread-service.lock"), timeout=0):
+                pass
 
 
 def test_failed_metadata_cleanup_does_not_leak_lock(tmp_path):

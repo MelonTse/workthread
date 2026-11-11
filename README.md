@@ -6,11 +6,11 @@
 
 > 请按照 https://github.com/MelonTse/workthread 首页的 Windows 安装说明，在这台电脑上安装并配置 WorkThread。完成后打开工作台，并告诉我如何检查更新。
 
-[Windows 安装说明与推荐版本 v1.0.0rc8](docs/windows/FIRST_INSTALL.md) · Windows 10 22H2 / Windows 11 x64
+[Windows 安装说明与推荐版本 v1.0.0rc9](docs/windows/FIRST_INSTALL.md) · Windows 10 22H2 / Windows 11 x64
 
 轻量、单用户、本机运行的 AI 工作事项工作台。Python 负责持久化、IMAP 与校验；用户可通过 WorkBuddy 或自己配置的模型 API 生成和重写邮件草稿、录入与维护待办、整理客户知识。候选知识经用户确认后入库。
 
-Windows x64 发布候选版 **1.0.0rc8** 支持在后台持续拉取邮件，关闭网页后仍可按任务编号查看进度。官方 rc4、rc5、rc6、rc7 用户可从「设置与运行状态 → 软件更新」保留本机数据升级。程序 ZIP 的 SHA-256 见 [v1.0.0rc8 发布页](https://github.com/MelonTse/workthread/releases/tag/v1.0.0rc8)。
+Windows x64 发布候选版 **1.0.0rc9** 新增工作空间单实例保护，重复启动会打开已有工作台，并包含 rc8 的后台邮件拉取与断点续传。官方 rc4、rc5、rc6、rc7、rc8 用户可从「设置与运行状态 → 软件更新」保留本机数据升级。程序 ZIP 的 SHA-256 见 [v1.0.0rc9 发布页](https://github.com/MelonTse/workthread/releases/tag/v1.0.0rc9)。
 
 Windows Server 2022 上已自动验证两个历史 rc3 的升级和全新 rc4 的首次网页更新。Windows 10 19045、Windows 11 与 WorkBuddy 客户端的安装、Skills 发现及实际调用仍待桌面验收。
 

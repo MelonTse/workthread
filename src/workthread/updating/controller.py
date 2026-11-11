@@ -185,7 +185,8 @@ def launch(root, args):
     state.mkdir(exist_ok=True)
     lease = FileLock(str(state / ("session-" + uuid.uuid4().hex + ".lock")), timeout=0)
     with contextlib.ExitStack() as stack:
-        with FileLock(str(state / "install.lock"), timeout=0):
+        # Concurrent clicks can briefly overlap while each launcher creates its lease.
+        with FileLock(str(state / "install.lock"), timeout=5):
             if (
                 tx.journal(root).exists()
                 and rel.read(tx.journal(root))["phase"] == "switching"

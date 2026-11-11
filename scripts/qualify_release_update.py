@@ -27,6 +27,10 @@ OLD = {
         "528592c0993ccef92fb3d7689c4a4499ba083883",
         "b5e16ec5c29adac1c06df869d5c73fae479528378a812cd198425afb510db890",
     ),
+    "1.0.0rc8": (
+        "9d6f56de084082351c37646e581d134e68e6672a",
+        "add052f3fa5298eb12805572ce10ea50d9549c8ed17cc5f0f8e6fbb70e69122c",
+    ),
     "1.0.0rc7": (
         "a74eec51dcd9e889ac4f299d3871409d8aeb6d6e",
         "752d7db885a05cf054cad0c313e4a40214c7c0dd6be0099cfa99e08121af211d",
@@ -119,6 +123,17 @@ def browser_upgrade(target, expected):
             check=True,
             timeout=420,
         )
+        with urllib.request.urlopen(url + "/api/v1/instance", timeout=5) as response:
+            active_instance = json.load(response)["instance_id"]
+        duplicate = subprocess.run(
+            [str(target / tx.EXE), "--workspace", str(target / "workspace"),
+             "serve", "--port", str(port)],
+            capture_output=True, encoding="utf-8", timeout=30, check=True,
+        )
+        assert "工作台已运行" in duplicate.stdout
+        with urllib.request.urlopen(url + "/api/v1/instance", timeout=5) as response:
+            assert json.load(response)["instance_id"] == active_instance
+        print("PASS upgraded installation launcher reuses the existing workspace service")
     finally:
         subprocess.run(
             [

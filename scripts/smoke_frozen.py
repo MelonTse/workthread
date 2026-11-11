@@ -66,6 +66,23 @@ with tempfile.TemporaryDirectory(prefix="workthread smoke 中文 ") as tmp:
         saved = json.load(opener.open("http://127.0.0.1:18765/api/v1/todos/" + tid))
         assert len(saved["logs"]) == 2
 
+        active_instance = json.load(opener.open("http://127.0.0.1:18765/api/v1/instance"))["instance_id"]
+        duplicate = subprocess.run(
+            [str(exe), "--workspace", str(workspace), "demo", "--port", "18766"],
+            capture_output=True, encoding="utf-8", timeout=30, check=True,
+        )
+        assert "工作台已运行：http://127.0.0.1:18765" in duplicate.stdout
+        assert json.load(opener.open("http://127.0.0.1:18765/api/v1/instance"))["instance_id"] == active_instance
+        assert json.load(opener.open("http://127.0.0.1:18765/api/v1/todos/" + tid)) == saved
+        occupied_space = Path(tmp) / "other-workspace"
+        collision = subprocess.run(
+            [str(exe), "--workspace", str(occupied_space), "serve", "--port", "18765"],
+            capture_output=True, encoding="utf-8", timeout=30,
+        )
+        assert collision.returncode == 2 and "无法监听本机端口" in collision.stderr
+        assert not (occupied_space / "data").exists()
+        print("Frozen single-instance reuse and exclusive port binding: passed")
+
         archive = post(
             "/backup",
             json.dumps(

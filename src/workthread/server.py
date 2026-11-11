@@ -17,7 +17,7 @@ from .ai import Bridge
 from .operations import backup, backup_filename, restore, import_legacy, undo_import
 
 
-def create_app(store, updates=None, mail_tasks=None):
+def create_app(store, updates=None, mail_tasks=None, instance_id=None):
     from .mail_tasks import MailTasks
 
     mail_tasks = mail_tasks or MailTasks(store)
@@ -89,6 +89,10 @@ def create_app(store, updates=None, mail_tasks=None):
 
         session["csrf"] = session.get("csrf") or secrets.token_hex(32)
         return render_template("index.html", csrf=session["csrf"], version=__version__)
+
+    @app.get("/api/v1/instance")
+    def service_instance():
+        return jsonify(instance_id=instance_id)
 
     @app.get("/api/v1/software-update")
     def update_status():

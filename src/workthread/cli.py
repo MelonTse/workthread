@@ -49,6 +49,8 @@ def main(argv=None):
         from .updating.controller import cli
         try:
             result = cli(args[1:])
+            if args[1:2] == ["launch"]:
+                raise SystemExit(result)
             if result is not None:
                 print(dumps(result))
         except (ValueError, OSError, KeyError, RuntimeError) as e:
@@ -89,6 +91,25 @@ def main(argv=None):
     legacy.add_argument("file", type=Path)
     legacy.add_argument("--apply", action="store_true")
     a = p.parse_args(argv)
+    if a.command in ("serve", "demo"):
+        from .service import ServiceInstance
+
+        try:
+            with ServiceInstance(a.workspace, a.port) as instance:
+                if instance.socket is None:
+                    print("工作台已运行：" + instance.url, flush=True)
+                    if a.open:
+                        webbrowser.open(instance.url)
+                    return
+                return run(a, p, instance)
+        except (ValueError, OSError) as exc:
+            p.exit(2, str(exc) + "\n")
+    return run(a, p)
+
+
+def run(a, p, instance=None):
+    import sys
+
     store = Store(a.workspace)
     deployment = install_templates(store)
     if not deployment["ready"]:
@@ -108,20 +129,23 @@ def main(argv=None):
         from .updating.controller import Updates, install_root
 
         stop = threading.Event()
-        updates = Updates(install_root(store.root), stop.set, a.port)
+        updates = Updates(install_root(store.root), stop.set, instance.port)
         from .mail_tasks import MailTasks
 
         mail_tasks = MailTasks(store, stop)
         t = threading.Thread(target=worker, args=(store, stop, mail_tasks), daemon=True)
-        t.start()
-        url = f"http://127.0.0.1:{a.port}"
-        print("WorkThread " + url, flush=True)
-        if a.open:
-            threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         try:
             sockets = {}
-            server = create_server(create_app(store, updates, mail_tasks), host="127.0.0.1", port=a.port, threads=6, map=sockets)
+            server = create_server(
+                create_app(store, updates, mail_tasks, instance.instance_id),
+                sockets=[instance.socket], threads=6, map=sockets,
+            )
             try:
+                instance.ready()
+                t.start()
+                print("WorkThread " + instance.url, flush=True)
+                if a.open:
+                    webbrowser.open(instance.url)
                 while not stop.is_set():
                     wasyncore.loop(timeout=0.2, count=1, map=sockets)
                 # Flush the final apply response, then stop accepting new requests.
@@ -130,14 +154,15 @@ def main(argv=None):
             finally:
                 server.close()
                 server.task_dispatcher.shutdown(timeout=40)
-                if updates.stopping:
-                    while server.task_dispatcher.threads:
-                        time.sleep(0.1)
+                # Keep workspace ownership until every accepted request has stopped writing.
+                while server.task_dispatcher.threads:
+                    time.sleep(0.1)
                 wasyncore.close_all(map=sockets)
         finally:
             stop.set()
             mail_tasks.close()
-            t.join(timeout=None if updates.stopping else 35)
+            if t.ident is not None:
+                t.join()
         return
     if a.command == "doctor":
         result = store.health()

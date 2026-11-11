@@ -1,0 +1,36 @@
+name: Standalone RC7 to RC9 upgrade tool
+on:
+  push:
+    branches: ['codex/rc7-rc9-upgrade-tool']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - run: uv sync --frozen --python 3.13
+      - run: uv run --frozen pytest -q --junitxml=artifacts/tool-tests.xml
+      - run: uv run --frozen python scripts/check_source.py
+      - run: uv run --frozen pyinstaller --noconfirm packaging/upgrade-tool.spec
+      - name: Official RC7 to RC9 and fault protection with synthetic data
+        run: uv run --frozen python standalone/check_windows.py --tool dist/WorkThreadUpgrade/WorkThreadUpgrade.exe --output artifacts/upgrade-qa
+      - run: uv run --frozen python standalone/package_tool.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorkThread-RC7-to-RC9-Upgrade-Tool
+          path: |
+            artifacts/WorkThread-RC7-to-RC9-Upgrade-Tool-*.zip
+            artifacts/WorkThread-RC7-to-RC9-Upgrade-Tool-*.sha256
+            artifacts/tool-tests.xml
+            artifacts/upgrade-qa/WINDOWS_REPORT.json
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: standalone-synthetic-diagnostics
+          path: artifacts/upgrade-qa

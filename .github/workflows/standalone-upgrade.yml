@@ -19,7 +19,7 @@ jobs:
       - run: uv run --frozen python scripts/check_source.py
       - run: uv run --frozen pyinstaller --noconfirm packaging/upgrade-tool.spec
       - name: Official RC7 to RC9 and fault protection with synthetic data
-        run: uv run --frozen python standalone/check_windows.py --tool dist/WorkThreadUpgrade/WorkThreadUpgrade.exe --output artifacts/upgrade-qa
+        run: ./standalone/check_standard_user.ps1
       - run: uv run --frozen python standalone/package_tool.py
       - uses: actions/upload-artifact@v4
         with:

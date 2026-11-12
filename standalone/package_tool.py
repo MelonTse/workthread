@@ -7,7 +7,7 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 out = root / "artifacts"
-name = "WorkThread-RC7-to-RC9-Upgrade-Tool-1.0.0"
+name = "WorkThread-RC7-to-RC9-Upgrade-Tool-1.0.1"
 stage = out / name
 stage.mkdir()
 shutil.copytree(root / "dist/WorkThreadUpgrade", stage / "tool")
@@ -19,7 +19,7 @@ shutil.copy2(out / "tool-tests.xml", stage / "tool-tests.xml")
 (stage / "BUILD_INFO.json").write_text(
     json.dumps(
         {
-            "tool_version": "1.0.0",
+            "tool_version": "1.0.1",
             "commit_sha": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=root, text=True
             ).strip(),
@@ -32,7 +32,7 @@ shutil.copy2(out / "tool-tests.xml", stage / "tool-tests.xml")
     encoding="utf-8",
 )
 (stage / "TEST_REPORT.md").write_text(
-    "Windows Server 2022 x64: all automated tests and official RC7 -> RC9 synthetic upgrade/failure checks passed. See tool-tests.xml and WINDOWS_REPORT.json. Windows 10/11 client acceptance is pending. No real mailbox or user data was used.\n",
+    "Windows Server 2022 x64, standard local user (not administrator): all automated tests and official RC7 -> RC9 synthetic upgrade/failure checks passed. See tool-tests.xml and WINDOWS_REPORT.json. Windows 10/11 client acceptance is pending. No real mailbox or user data was used.\n",
     encoding="utf-8",
 )
 

@@ -1,6 +1,7 @@
 """Actual RC7/RC9 ZIPs and synthetic data only; never uses an existing installation."""
 
 import argparse
+import ctypes
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "tests")]
 from check_windows_upgrade import seed_old
 from test_updates import records
 
+from workthread.updating import copy_security as security
 from workthread.updating import releases as rel
 from workthread.updating import standalone as helper
 from workthread.updating import transaction as tx
@@ -39,7 +41,7 @@ def download(url, path):
             time.sleep(2)
 
 
-def run(tool, root, release, logs, *flags, expected=0, detached=False):
+def run(tool, root, release, logs, *flags, expected=0, detached=False, input_text=None):
     args = [
         str(tool),
         "--install-root",
@@ -54,7 +56,7 @@ def run(tool, root, release, logs, *flags, expected=0, detached=False):
     with log.open("wb") as stream:
         p = subprocess.Popen(
             args,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=stream,
             stderr=subprocess.STDOUT,
             creationflags=(
@@ -63,11 +65,21 @@ def run(tool, root, release, logs, *flags, expected=0, detached=False):
             if detached
             else 0,
         )
-        code = p.wait(300)
+        if input_text is not None:
+            p.communicate(input_text.encode("utf-8"), timeout=300)
+        else:
+            p.wait(300)
+        code = p.returncode
     if code != expected:
         raise AssertionError(
             (code, expected, log.read_text(encoding="utf-8", errors="replace")[-5000:])
         )
+    result = rel.read(next(logs.glob("*/result.json")))
+    assert result["exit_code"] == expected
+    if "--inspect" in flags:
+        assert result["status"] == "INSPECT_PASSED" and not result["success"]
+    if expected == 1:
+        assert result["status"] == "FAILED" and not result["success"]
     return log
 
 
@@ -87,9 +99,13 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument("--tool", type=Path, required=True)
     a.add_argument("--output", type=Path, required=True)
+    a.add_argument("--require-standard-user", action="store_true")
     args = a.parse_args()
     if os.name != "nt":
         a.error("Native Windows only")
+    administrator = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    if args.require_standard_user:
+        assert not administrator, "Expected a non-administrator token"
     tool = args.tool.resolve()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -175,6 +191,7 @@ def main():
                 )
                 prior_bootstrap = rel.digest(state / "bootstrap/WorkThread.exe")
             before = records(root)
+            permissions = {n: security.inventory(root / n) for n in tx.SPACES}
             run(tool, root, assets, out / (mode + "-inspect"), "--inspect")
             assert records(root) == before
             run(
@@ -187,6 +204,7 @@ def main():
             )
             assert tx.current(root)[1]["commit_sha"] == helper.TARGET
             assert records(root) == before
+            assert {n: security.inventory(root / n) for n in tx.SPACES} == permissions
             assert rel.read(root / tx.STATE / "result.json")["version"] == "1.0.0rc9"
             if mode == "prior-failed-update":
                 assert old_snapshot.is_dir() and not list(old_snapshot.iterdir())
@@ -264,6 +282,20 @@ throw 'Synthetic processes still running'
                 mode
                 + ": official RC7 -> RC9; all records, files, ADS, hidden/empty, fixed entry and HTTP verified"
             )
+        root = fresh("cancelled")
+        before = records(root)
+        run(tool, root, assets, out / "cancelled", expected=2, input_text="update\n")
+        assert (
+            records(root) == before
+            and tx.current(root)[1]["commit_sha"] == helper.SOURCE
+        )
+        assert (
+            rel.read(next((out / "cancelled").glob("*/result.json")))["status"]
+            == "CANCELLED"
+        )
+        cases.append(
+            "cancelled: lowercase confirmation refused; overall exit code 2 recorded; RC7 intact"
+        )
         for kind in ("signature", "archive"):
             root = fresh(kind)
             before = records(root)
@@ -372,11 +404,40 @@ throw 'Synthetic processes still running'
             cases.append(
                 kind + ": original RC7/data restored or untouched; doctor passed"
             )
+        acl_source = temp / "custom-acl-source"
+        acl_source.mkdir()
+        (acl_source / "sensitive.txt").write_text("synthetic content", encoding="utf-8")
+        subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "$a=Get-Acl -LiteralPath $env:WT_ACL_FIXTURE; $a.SetAccessRuleProtection($true,$true); Set-Acl -LiteralPath $env:WT_ACL_FIXTURE -AclObject $a",
+            ],
+            env=dict(os.environ, WT_ACL_FIXTURE=str(acl_source)),
+            check=True,
+        )
+        acl_before = security.inventory(acl_source)
+        acl_target = temp / "custom-acl-target"
+        acl_log = out / "custom-acl-refusal"
+        acl_log.mkdir()
+        try:
+            helper.native_copy(acl_source, acl_target, acl_log)
+        except ValueError as exc:
+            assert "未复制业务内容" in str(exc)
+        else:
+            raise AssertionError("Different inherited permissions were not refused")
+        assert not (acl_target / "sensitive.txt").exists()
+        assert security.inventory(acl_source) == acl_before
+        cases.append(
+            "custom-acl: refused before business content copy; source permissions unchanged"
+        )
         report = {
             "passed": cases,
             "source_sha": helper.SOURCE,
             "target_sha": helper.TARGET,
             "environment": "Windows Server 2022 x64; synthetic only; Windows 10 client pending",
+            "administrator": administrator,
         }
         (out / "WINDOWS_REPORT.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import ctypes
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -14,6 +15,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from ..diagnostics import describe_error
+from . import copy_security
 from . import releases as rel
 from . import transaction as tx
 from .controller import no_leases
@@ -23,7 +25,7 @@ SOURCE_EXE = "91d5e1825b91c0c9bee9bd89a31eda92501245ee2c9d5b5e025fe9e9e2d38cae"
 TARGET = "49381b86143bbe5ce48b4f47c6d05880927b1b48"
 PACKAGE_SHA = "8638fb190766b63422260c9ef4511a70d64839c01fc9ad5bba5d6b3c5a402ae6"
 ASSET = "WorkThread-1.0.0rc9-windows-x64.zip"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 
 class Evidence:
@@ -114,14 +116,37 @@ def system_robocopy():
     return Path(buffer.value) / "robocopy.exe"
 
 
+def check_copy_log(code, folder):
+    log_file = folder / "robocopy.txt"
+    if not log_file.is_file():
+        rel.save(
+            folder / "process-result.json", {"exit_code": code, "log_missing": True}
+        )
+        raise ValueError("复制程序没有生成完整日志，停止切换")
+    log = log_file.read_text(encoding="utf-16", errors="replace")
+    reported_error = bool(re.search(r"\(0x(?!00000000)[0-9a-fA-F]{8}\)", log))
+    rel.save(
+        folder / "process-result.json",
+        {
+            "exit_code": code,
+            "reported_error": reported_error,
+        },
+    )
+    if reported_error:
+        raise ValueError(
+            f"复制日志报告系统错误（子进程返回 {code}），停止切换；请查看 robocopy.txt"
+        )
+
+
 def native_copy(src, dst, folder):
+    security = copy_security.prepare(src, dst, folder)
     exe = system_robocopy()
     args = [
         str(exe),
         str(src),
         str(dst),
         "/E",
-        "/COPY:DATS",
+        "/COPY:DAT",
         "/DCOPY:DAT",
         "/XJ",
         "/R:0",
@@ -129,6 +154,8 @@ def native_copy(src, dst, folder):
         "/NFL",
         "/NDL",
         "/NP",
+        "/IS",
+        "/IT",
         "/UNILOG:" + str(folder / "robocopy.txt"),
     ]
     rel.save(
@@ -157,6 +184,9 @@ def native_copy(src, dst, folder):
             check=False,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+    check_copy_log(result.returncode, folder)
+    if result.returncode in (0, 1):
+        copy_security.verify(src, dst, security, folder)
     return result.returncode
 
 
@@ -348,13 +378,29 @@ def main(argv=None):
         parser.error("Diagnostic logs must be outside the existing installation")
     evidence = Evidence(logs / (time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]))
     evidence.event("独立升级工具 " + TOOL_VERSION + "；安装目录 " + str(root))
+
+    def finish(status, code, **extra):
+        evidence.save(
+            "result.json",
+            {
+                "status": status,
+                "exit_code": code,
+                "success": status == "SUCCESS",
+                **extra,
+            },
+        )
+        evidence.event(
+            f"本次结果：{status}；工具退出码 {code}；日志 {evidence.directory}"
+        )
+        return code
+
     try:
         if args.recover:
             if (
                 not args.confirmed
                 and input("Close WorkThread and WorkBuddy. Type RECOVER: ") != "RECOVER"
             ):
-                return 2
+                return finish("CANCELLED", 2)
             tx.native_quiet(root=root)
             with FileLock(str(root / tx.STATE / "install.lock"), timeout=0):
                 no_leases(root / tx.STATE)
@@ -366,31 +412,31 @@ def main(argv=None):
             evidence.event(
                 "恢复检查完成。已提交升级不会回退；发现新写入时会停止并保留双方数据。"
             )
-            return 0
+            return finish("RECOVERY_CHECKED", 0, current=tx.current(root)[1])
         with evidence.progress("校验官方 RC7 身份、RC9 签名和安装包"):
             inputs = validate(root, args.release_dir.resolve(strict=True))
         evidence.event("检查通过：官方 RC7 -> 官方 RC9；不连接网络、不自动启动收信")
         if args.inspect:
-            return 0
+            return finish("INSPECT_PASSED", 0)
         if args.probe:
             probe_environment(root, evidence)
-            return 0
+            return finish("PROBE_PASSED", 0)
         if (
             not args.confirmed
             and input("Close WorkThread and WorkBuddy. Type UPDATE: ") != "UPDATE"
         ):
             evidence.event("已取消，未执行升级")
-            return 2
+            return finish("CANCELLED", 2)
         tx.native_quiet(root=root)
         probe_environment(root, evidence)
-        apply_verified(root, inputs, evidence)
+        result = apply_verified(root, inputs, evidence)
         evidence.event("请从原安装目录启动 Start.cmd，核对网页版本 1.0.0rc9。")
-        return 0
+        return finish("SUCCESS", 0, **result)
     except Exception as exc:  # noqa: BLE001 - CLI boundary records errors and exits nonzero
         detail = str(exc) if isinstance(exc, ValueError) else describe_error(exc)
         evidence.save("failure.json", {"type": type(exc).__name__, "error": detail})
         evidence.event("停止操作：" + detail + "；请保留日志，不要删除锁文件或失败快照")
-        return 1
+        return finish("FAILED", 1, error=detail, error_type=type(exc).__name__)
 
 
 if __name__ == "__main__":

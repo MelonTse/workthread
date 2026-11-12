@@ -204,7 +204,20 @@ def main():
             )
             assert tx.current(root)[1]["commit_sha"] == helper.TARGET
             assert records(root) == before
-            assert {n: security.inventory(root / n) for n in tx.SPACES} == permissions
+            after_permissions = {n: security.inventory(root / n) for n in tx.SPACES}
+            permission_diff = {
+                n: helper.differences(permissions[n], after_permissions[n])
+                for n in tx.SPACES
+            }
+            rel.save(
+                out / (mode + "-permissions.json"),
+                {
+                    "before": permissions,
+                    "after": after_permissions,
+                    "differences": permission_diff,
+                },
+            )
+            assert after_permissions == permissions, permission_diff
             assert rel.read(root / tx.STATE / "result.json")["version"] == "1.0.0rc9"
             if mode == "prior-failed-update":
                 assert old_snapshot.is_dir() and not list(old_snapshot.iterdir())

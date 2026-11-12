@@ -217,7 +217,18 @@ def main():
                     "differences": permission_diff,
                 },
             )
-            assert after_permissions == permissions, permission_diff
+            # The target probe opens SQLite in WAL mode. Its two new sidecars
+            # are expected; every original entry must retain its descriptor.
+            # Newly created sidecars must have the database's same rights.
+            sidecars = {"data/workthread.sqlite3-shm", "data/workthread.sqlite3-wal"}
+            for n, diff in permission_diff.items():
+                assert not diff["missing"] and not diff["changed"], permission_diff
+                assert set(diff["extra"]) <= sidecars, permission_diff
+                for path in diff["extra"]:
+                    assert (
+                        after_permissions[n][path]
+                        == permissions[n]["data/workthread.sqlite3"]
+                    )
             assert rel.read(root / tx.STATE / "result.json")["version"] == "1.0.0rc9"
             if mode == "prior-failed-update":
                 assert old_snapshot.is_dir() and not list(old_snapshot.iterdir())

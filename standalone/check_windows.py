@@ -436,7 +436,9 @@ throw 'Synthetic processes still running'
                 "powershell.exe",
                 "-NoProfile",
                 "-Command",
-                "$a=Get-Acl -LiteralPath $env:WT_ACL_FIXTURE; $a.SetAccessRuleProtection($true,$true); Set-Acl -LiteralPath $env:WT_ACL_FIXTURE -AclObject $a",
+                # .NET Framework API in Windows PowerShell: avoids importing
+                # a PowerShell 7 Security module inherited from the runner.
+                "$ErrorActionPreference='Stop'; $a=[IO.Directory]::GetAccessControl($env:WT_ACL_FIXTURE); $a.SetAccessRuleProtection($true,$true); [IO.Directory]::SetAccessControl($env:WT_ACL_FIXTURE,$a)",
             ],
             env=dict(os.environ, WT_ACL_FIXTURE=str(acl_source)),
             check=True,

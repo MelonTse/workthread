@@ -200,3 +200,30 @@ def test_single_mail_failure_visible_without_losing_other_mail(tmp_path):
         Sync(Store(tmp_path)).status("demo")["message_errors"]
         == result["message_errors"]
     )
+
+
+@pytest.mark.parametrize(
+    "headers, confirmed",
+    [
+        ({}, False),
+        ({"Retry-After": "60"}, False),
+        ({"X-RateLimit-Remaining": "0", "Retry-After": "60"}, True),
+    ],
+)
+def test_http_403_only_claims_rate_limit_with_evidence(monkeypatch, headers, confirmed):
+    url = "https://api.github.com/repos/owner/name/releases?signature=" + SECRET
+
+    def reject(*args, **kwargs):
+        raise urllib.error.HTTPError(url, 403, SECRET, headers, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", reject)
+    monkeypatch.setattr(rel, "proxy_source", lambda _: "系统代理")
+    with pytest.raises(rel.FetchError) as error:
+        rel.fetch(url, 100)
+    assert ("请求额度已用完" in str(error.value)) == confirmed
+    assert ("具体原因未确定" in str(error.value)) != confirmed
+    details = error.value.diagnostic
+    assert details["http_status"] == 403 and details["host"] == "api.github.com"
+    assert details["proxy_source"] == "系统代理"
+    assert bool(details["retry_at"]) == bool(headers)
+    assert SECRET not in str(error.value) + json.dumps(details)

@@ -1288,50 +1288,69 @@ const settingsState = {
 function updateCard() {
   return card('软件更新','<div class="card-body stack"><div id="update-status" class="prewrap" role="status"></div><div id="update-actions" class="button-row"></div></div>');
 }
+const updatePhases = {
+  check: '检查更新', download: '下载', verify: '校验安装包', apply: '安装',
+  quiet: '检查停写', handoff: '启动升级工具', 'waiting-stop': '等待旧工作台退出',
+  'snapshot-workspace': '备份正式工作空间', 'snapshot-acceptance': '备份验收工作空间',
+  'trial-workspace': '验证正式空间副本', 'trial-acceptance': '验证验收空间副本',
+  switching: '切换程序和工作空间', restarting: '启动新版并检查健康状态'
+};
 async function showSoftwareUpdate() {
   const status = $('#update-status'), actions = $('#update-actions');
+  let watching = false;
+  const pendingKey = 'workthread-update-pending';
+  const active = job => job && !['succeeded', 'failed'].includes(job.phase);
   const paint = (r, checked=false) => {
+    if (!status.isConnected) return;
     actions.replaceChildren();
     const lines = ['当前版本：'+r.current];
-    if (r.last) lines.push(r.last.error ? '上次更新失败：'+r.last.error : '已更新至 '+r.last.version);
+    const job = r.attempt;
+    if (job?.phase === 'succeeded' && job.target_commit === r.current_commit)
+      lines.push('已更新至 '+job.target_version);
+    else if (job?.phase === 'failed')
+      lines.push('更新未完成 · '+(updatePhases[job.failed_stage] || '安装'), job.error);
+    else if (!job && r.last) lines.push(r.last.error ? '上次更新失败：'+r.last.error : '已更新至 '+r.last.version);
     if (r.transaction === 'rolled-back') lines.push('原版本与工作空间已恢复。');
+    if (r.checked_at) lines.push('上次成功检查：'+date(r.checked_at));
     if (r.offer) lines.push('可用版本：'+r.offer.version, r.offer.notes);
     else if (checked || r.check_message) lines.push(r.check_message || '已成功检查，暂无适用于此安装的已发布更新。');
     if (r.last_error) lines.push(r.last_error.operation+'失败 · '+date(r.last_error.time), r.last_error.message, '诊断编号 '+r.last_error.reference);
     if (!r.enabled) lines.push('请在 Windows 正式工作空间中检查更新。');
+    if (active(job)) lines.push('正在备份并重启。请保持此页面打开。', updatePhases[job.phase], '更新编号 '+job.id);
+    else if (r.operation) lines.push('正在'+(updatePhases[r.operation] || '处理更新')+'…');
     status.textContent = lines.filter(Boolean).join('\n');
+    if (active(job) || r.operation) {
+      watch(active(job) ? job.id : null);
+      return;
+    }
     const button = (label, operation) => {
       const b = document.createElement('button');
       b.textContent = label;
       b.disabled = !r.enabled;
       b.onclick = async () => {
         if (operation === 'apply' && !window.confirm('请先关闭 WorkBuddy。工作台将暂停、备份两个工作空间，并重启更新。继续吗？')) return;
+        const id = operation === 'apply' ? crypto.randomUUID().replaceAll('-', '') : null;
+        if (id) sessionStorage.setItem(pendingKey, JSON.stringify({id}));
         for (const el of actions.children) el.disabled = true;
+        status.textContent += '\n正在'+updatePhases[operation]+'…';
         try {
-          const next = await api('/software-update/'+operation,'POST',{confirmed:operation==='apply'});
-          if (operation !== 'apply') { paint(next,true); return; }
-          actions.replaceChildren();
-          status.textContent = '正在备份并重启。请保持此页面打开。';
-          const deadline = Date.now()+15*60*1000;
-          const timer = setInterval(async () => {
-            if (Date.now()>deadline) {
-              clearInterval(timer);
-              status.textContent = '尚未重新连接。请从原 Start.cmd 查看更新或恢复状态，不要覆盖工作空间。';
-              return;
-            }
-            try {
-              const s = await api('/software-update');
-              if (s.last) { clearInterval(timer); sessionStorage.setItem('workthread-update-return','1'); location.reload(); }
-            } catch (_) { /* detached updater owns the install lock */ }
-          }, 2000);
+          const next = await api('/software-update/'+operation,'POST', id ? {confirmed:true, attempt_id:id} : {});
+          paint(next, operation === 'check');
         } catch (err) {
           try {
-            const latest = await api('/software-update');
+            const latest = await api('/software-update', 'GET', undefined, AbortSignal.timeout(3000));
+            if (id && latest.attempt?.id !== id) sessionStorage.removeItem(pendingKey);
             paint(latest);
-            if (!latest.last_error) status.textContent += '\n'+err.message;
+            if (!latest.last_error && !active(latest.attempt)) status.textContent += '\n'+err.message;
           } catch (_) {
-            paint({...r, last_error: null, check_message: null, ...(operation === 'check' ? {offer:null, ready:false} : {})});
-            status.textContent += '\n'+err.message;
+            if (operation === 'apply') {
+              actions.replaceChildren();
+              status.textContent = '已提交更新确认，等待工作台重新连接。';
+              watch(id);
+            } else {
+              paint(r);
+              status.textContent += '\n'+err.message;
+            }
           }
         }
       };
@@ -1340,10 +1359,79 @@ async function showSoftwareUpdate() {
     button('检查更新','check');
     if (r.offer && !r.ready) button('下载并检查','download');
     if (r.ready) button('备份并重启更新','apply');
+    if (r.last_error || job?.phase === 'failed') {
+      const copy = document.createElement('button');
+      copy.textContent = '复制诊断信息';
+      copy.onclick = attempt(async () => {
+        await navigator.clipboard.writeText(JSON.stringify({
+          current: r.current, current_commit: r.current_commit,
+          attempt: job || null, error: r.last_error || null
+        }, null, 2));
+        toast('诊断信息已复制');
+      });
+      actions.append(copy);
+    }
   };
+
+  async function watch(id) {
+    if (watching) return;
+    watching = true;
+    if (id) sessionStorage.setItem(pendingKey, JSON.stringify({id}));
+    const started = Date.now();
+    while (status.isConnected) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (!status.isConnected) break;
+      try {
+        const r = await api('/software-update', 'GET', undefined, AbortSignal.timeout(3000));
+        if (id && r.attempt?.id !== id) {
+          if (r.operation || Date.now()-started < 15000) continue;
+          sessionStorage.removeItem(pendingKey);
+          watching = false;
+          paint(r);
+          status.textContent += '\n未收到本次更新已启动的确认，请核对当前状态。';
+          return;
+        }
+        if (!r.operation && !active(r.attempt)) {
+          sessionStorage.removeItem(pendingKey);
+          watching = false;
+          if (id) {
+            sessionStorage.setItem('workthread-update-return','1');
+            location.reload();
+          } else paint(r);
+          return;
+        }
+        if (!id && r.attempt && active(r.attempt)) {
+          id = r.attempt.id;
+          sessionStorage.setItem(pendingKey, JSON.stringify({id}));
+        }
+        if (active(r.attempt))
+          status.textContent = '正在备份并重启。请保持此页面打开。\n'+(updatePhases[r.attempt.phase] || '');
+      } catch (_) { /* The detached updater owns the installation during restart. */ }
+      const seconds = Math.floor((Date.now()-started)/1000);
+      if (seconds >= 15*60)
+        status.textContent = '尚未确认更新完成，仍在等待工作台连接。请勿重复启动或覆盖安装。';
+      else if (!status.textContent.includes('正在备份并重启') && id)
+        status.textContent = '正在备份并重启。请保持此页面打开。';
+    }
+  }
+
+  let pending;
+  try { pending = JSON.parse(sessionStorage.getItem(pendingKey)); } catch (_) { sessionStorage.removeItem(pendingKey); }
   try {
-    paint(await api('/software-update'));
+    const r = await api('/software-update', 'GET', undefined, AbortSignal.timeout(3000));
+    if (pending?.id && r.attempt?.id !== pending.id) {
+      status.textContent = '正在等待本次更新结果。';
+      watch(pending.id);
+      return;
+    }
+    if (pending && !active(r.attempt)) sessionStorage.removeItem(pendingKey);
+    paint(r);
   } catch (err) {
+    if (pending) {
+      status.textContent = '正在等待工作台重新连接。';
+      watch(pending.id);
+      return;
+    }
     status.textContent = '无法读取本机更新状态：' + err.message;
     const retry = document.createElement('button');
     retry.textContent = '重新读取更新状态';

@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from werkzeug.serving import make_server
 
+import workthread
 from workthread.core import Store
 from workthread.server import create_app
 from workthread.updating import controller as ctl
@@ -70,16 +71,22 @@ def host(tmp, port):
     def stop():
         threading.Timer(0.1, server.shutdown).start()
 
-    updates = ctl.Updates(root, stop, port)
-    server = make_server(
-        "127.0.0.1", port, create_app(Store(root / "workspace"), updates), threaded=True
-    )
     with (
+        patch.object(workthread, "__version__", tx.current(root)[1]["version"]),
         patch.object(rel, "fetch", fetch),
         patch.object(rel, "trust", lambda: key),
         patch.object(ctl, "detached", handoff),
         patch.object(tx, "native_quiet", lambda **k: None),
     ):
+        updates = ctl.Updates(root, stop, port)
+        store = Store(root / "workspace")
+        server = make_server(
+            "127.0.0.1",
+            port,
+            create_app(store, updates),
+            threaded=True,
+        )
+        updates.confirm_started(store.health)
         server.serve_forever()
     server.server_close()
 
@@ -165,7 +172,9 @@ def main():
                     pub,
                 ),
             )
-            rel.save(root / tx.STATE / "result.json", result)
+            assert result["version"] == target
+            update = ctl.Attempt(root)
+            update.write(update.read(), "restarting")
             new = subprocess.Popen(args)
             if browser.wait(40) != 0:
                 raise RuntimeError("browser check failed")

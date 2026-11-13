@@ -142,6 +142,7 @@ def run(a, p, instance=None):
             )
             try:
                 instance.ready()
+                updates.confirm_started(store.health)
                 t.start()
                 print("WorkThread " + instance.url, flush=True)
                 if a.open:

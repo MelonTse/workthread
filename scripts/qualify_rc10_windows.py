@@ -310,9 +310,12 @@ def exercise(out):
     with zipfile.ZipFile(candidate) as z:
         z.extractall(out / "fresh-extracted")
     shutil.move(out / "fresh-extracted" / candidate.stem, fresh)
+    run(["cmd.exe", "/d", "/c", "Install.cmd", "/quiet"], cwd=fresh, timeout=120)
+    health(fresh, "1.0.0rc10")
     for n in tx.SPACES:
         seed_old(fresh / tx.EXE, fresh / n)
     assert not (fresh / tx.STATE / "base").exists()
+    rel.save(fresh / tx.STATE / "result.json", {"version": "1.0.0rc10"})
     before_fresh = records(fresh)
     web_update(fresh, out, before_fresh)
     cases.append(

@@ -365,7 +365,8 @@ def wire(root, bundle):
 
 
 def apply(
-    root, archive, doc, sig, key, *, quiet=None, check=run_probe, hook=lambda _: None
+    root, archive, doc, sig, key, *, quiet=None, check=run_probe, hook=lambda _: None,
+    progress=lambda _: None, operation_id=None
 ):
     root = safe(Path(root)).resolve(strict=True)
     quiet = quiet or (lambda: native_quiet(root=root))
@@ -428,12 +429,14 @@ def apply(
         (tx / "old").mkdir()
         before, trials = {}, {}
         for name in SPACES:
+            progress("snapshot-" + name)
             live = root / name
             before[name] = catalog(live)
             snapshot = tx / "snapshot" / name
             copy_workspace(live, snapshot)
             if catalog(snapshot) != before[name]:
                 raise ValueError(f"{name} 快照内容已变化：复制结果与复制前清单不一致，已停止切换。可能仍有程序写入或复制异常；请关闭 WorkBuddy 和其他工作台后重试，仍失败时保留现场交给维护者检查")
+            progress("trial-" + name)
             trial = tx / "trial" / name
             flush_tree(snapshot)
             copy_workspace(snapshot, trial)
@@ -447,11 +450,13 @@ def apply(
         quiet()
         if any(catalog(root / n) != before[n] for n in SPACES):
             raise ValueError("工作空间在预检期间发生写入，取消切换")
+        progress("switching")
         wire(root, dest)
         quiet()
         ptr = state / "active.json"
         j = {
             "id": txid,
+            "operation_id": operation_id,
             "phase": "switching",
             "prior": read(ptr) if ptr.exists() else None,
             "from": info["current"]["version"],

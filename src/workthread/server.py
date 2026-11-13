@@ -106,7 +106,11 @@ def create_app(store, updates=None, mail_tasks=None, instance_id=None):
     def update_action(action):
         if action not in {"check", "download", "apply"}:
             return jsonify(error="未知更新操作"), 404
-        return jsonify(updates.action(action, (request.get_json(silent=True) or {}).get("confirmed") is True))
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            raise ValueError("更新请求格式错误")
+        options = {"attempt_id": body["attempt_id"]} if "attempt_id" in body else {}
+        return jsonify(updates.action(action, body.get("confirmed") is True, **options))
 
     @app.get("/api/v1/snapshot")
     def snapshot():

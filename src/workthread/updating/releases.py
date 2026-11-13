@@ -14,6 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
@@ -96,14 +98,26 @@ def signed(document, sig, key, current):
     try:
         key.verify(base64.b64decode(sig, validate=True), document)
     except (ValueError, InvalidSignature) as e:
-        raise ValueError("发布签名无效，已停止更新。请重新下载官方 update.json 和 update.sig；仍失败时联系维护者，不要跳过验签") from e
+        raise ValueError(
+            "发布签名无效，已停止更新。请重新下载官方 update.json 和 update.sig；仍失败时联系维护者，不要跳过验签"
+        ) from e
     try:
         m = json.loads(document)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValueError("发布清单 update.json 不是有效 JSON，请重新检查更新并联系维护者核对发布文件") from exc
-    if (not isinstance(m, dict) or any(not isinstance(m.get(k), str) for k in ("version", "commit_sha", "sha256"))
-            or not isinstance(m.get("sources"), list) or type(m.get("size")) is not int):
-        raise ValueError("发布清单 update.json 字段缺失或类型错误，请联系维护者核对签名发布清单")
+        raise ValueError(
+            "发布清单 update.json 不是有效 JSON，请重新检查更新并联系维护者核对发布文件"
+        ) from exc
+    if (
+        not isinstance(m, dict)
+        or any(
+            not isinstance(m.get(k), str) for k in ("version", "commit_sha", "sha256")
+        )
+        or not isinstance(m.get("sources"), list)
+        or type(m.get("size")) is not int
+    ):
+        raise ValueError(
+            "发布清单 update.json 字段缺失或类型错误，请联系维护者核对签名发布清单"
+        )
     v = m["version"]
     if (
         version(v) <= version(current["version"])
@@ -122,6 +136,55 @@ def signed(document, sig, key, current):
     return m
 
 
+class FetchError(ValueError):
+    def __init__(self, message, diagnostic):
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+def proxy_source(url):
+    scheme, host = (
+        urllib.parse.urlsplit(url).scheme,
+        urllib.parse.urlsplit(url).hostname,
+    )
+    try:
+        if not host or urllib.request.proxy_bypass(host):
+            return "直连"
+        if scheme in urllib.request.getproxies_environment():
+            return "环境变量代理"
+        if scheme in urllib.request.getproxies():
+            return "系统代理"
+        return "直连"
+    except (OSError, ValueError):
+        return "未识别"
+
+
+def http_details(exc):
+    if not isinstance(exc, urllib.error.HTTPError):
+        return None, None, False
+    headers = exc.headers or {}
+    retry_at = None
+    retry_after = headers.get("Retry-After", "")
+    remaining = headers.get("X-RateLimit-Remaining") == "0"
+    try:
+        if retry_after.isascii() and retry_after.isdecimal():
+            timestamp = time.time() + int(retry_after)
+        elif retry_after:
+            when = parsedate_to_datetime(retry_after)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=UTC)
+            timestamp = when.timestamp()
+        elif remaining:
+            timestamp = int(headers["X-RateLimit-Reset"])
+        else:
+            timestamp = 0
+        if timestamp > time.time():
+            retry_at = datetime.fromtimestamp(timestamp, UTC).isoformat()
+    except (ValueError, OverflowError, OSError, KeyError, TypeError):
+        pass
+    return exc.code, retry_at, exc.code == 429 or (exc.code == 403 and remaining)
+
+
 def fetch(url, limit, out=None):
     req = urllib.request.Request(
         url, headers={"User-Agent": "WorkThread-local-updater"}
@@ -134,6 +197,7 @@ def fetch(url, limit, out=None):
     for name in ("update.json", "update.sig"):
         if urllib.parse.urlsplit(url).path.endswith("/" + name):
             item = name
+    proxy = proxy_source(url)
     # Each metadata retry starts from the original URL and uses a fresh response.
     for attempt in range(2):
         host = urllib.parse.urlsplit(url).hostname
@@ -144,6 +208,7 @@ def fetch(url, limit, out=None):
                 if not response.geturl().startswith("https://"):
                     raise ValueError("拒绝非 HTTPS 下载")
                 host = urllib.parse.urlsplit(response.geturl()).hostname
+                proxy = proxy_source(response.geturl())
                 phase = "读取响应内容"
                 if out is None:
                     data = response.read(limit + 1)
@@ -154,6 +219,7 @@ def fetch(url, limit, out=None):
                     if length.isdigit() and received < int(length):
                         raise http.client.IncompleteRead(b"", int(length) - received)
                     return data
+                length = getattr(response, "headers", {}).get("Content-Length", "")
                 while chunk := response.read(1024 * 1024):
                     received += len(chunk)
                     if received > limit:
@@ -161,20 +227,53 @@ def fetch(url, limit, out=None):
                     phase = "保存下载文件"
                     out.write(chunk)
                     phase = "读取响应内容"
+                if length.isdigit() and received < int(length):
+                    raise http.client.IncompleteRead(b"", int(length) - received)
                 return
         except (OSError, http.client.HTTPException) as exc:
             reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-            transient = isinstance(reason, (TimeoutError, ConnectionError, http.client.IncompleteRead))
+            transient = isinstance(
+                reason, (TimeoutError, ConnectionError, http.client.IncompleteRead)
+            )
+            status, retry_at, limited = http_details(exc)
             if isinstance(exc, urllib.error.HTTPError):
+                host = urllib.parse.urlsplit(exc.geturl()).hostname
+                proxy = proxy_source(exc.geturl())
                 transient = exc.code in (502, 503, 504)
                 exc.close()
-            retry = transient and attempt == 0 and (out is None or phase == "连接或等待响应头")
+            retry = (
+                transient
+                and attempt == 0
+                and (out is None or phase == "连接或等待响应头")
+            )
             if retry:
                 time.sleep(0.3)
                 continue
-            raise ValueError(
-                f"{stage}失败（{item}，{host}，{phase}，尝试 {attempt + 1} 次，已接收 {received} 字节）："
-                f"{describe_error(exc)}。错误类型 {type(reason).__name__}"
+            detail = describe_error(exc)
+            if status == 403:
+                detail = (
+                    "HTTP 403：响应显示请求额度已用完"
+                    if limited
+                    else "HTTP 403：访问被拒绝，具体原因未确定。请检查代理访问策略或稍后重试"
+                )
+            if retry_at:
+                detail += f"；服务端建议重试时间：{retry_at}"
+            if out is not None and received:
+                detail += "；未完成的安装包不可用，请重新下载"
+            raise FetchError(
+                f"{stage}失败（{item}，{host}，{phase}，{proxy}，尝试 {attempt + 1} 次，已接收 {received} 字节）："
+                f"{detail}。错误类型 {type(reason).__name__}",
+                {
+                    "resource": item,
+                    "host": host,
+                    "network_phase": phase,
+                    "proxy_source": proxy,
+                    "tries": attempt + 1,
+                    "bytes_received": received,
+                    "http_status": status,
+                    "retry_at": retry_at,
+                    "error_type": type(reason).__name__,
+                },
             ) from exc
 
 
@@ -182,12 +281,16 @@ def discover(current, key):
     choices = []
     for page in range(1, 11):
         try:
-            rows = json.loads(fetch(
-                f"https://api.github.com/repos/{REPO}/releases?per_page=30&page={page}",
-                8 * 1024**2,
-            ))
+            rows = json.loads(
+                fetch(
+                    f"https://api.github.com/repos/{REPO}/releases?per_page=30&page={page}",
+                    8 * 1024**2,
+                )
+            )
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ValueError("GitHub 版本列表不是有效 JSON，请检查代理是否返回了登录页或拦截页，再重新检查更新") from exc
+            raise ValueError(
+                "GitHub 版本列表不是有效 JSON，请检查代理是否返回了登录页或拦截页，再重新检查更新"
+            ) from exc
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise ValueError("GitHub 版本列表结构不正确，请稍后重试并检查代理响应")
         for row in rows:
@@ -238,7 +341,9 @@ def discover(current, key):
 
 def verify_zip(path, m):
     if path.stat().st_size != m["size"] or digest(path) != m["sha256"]:
-        raise ValueError(f"安装包大小或 SHA-256 不匹配（实际 {path.stat().st_size} 字节，声明 {m['size']} 字节），已停止更新。文件可能未完整下载或内容已变化，请重新下载官方安装包，不要强制安装")
+        raise ValueError(
+            f"安装包大小或 SHA-256 不匹配（实际 {path.stat().st_size} 字节，声明 {m['size']} 字节），已停止更新。文件可能未完整下载或内容已变化，请重新下载官方安装包，不要强制安装"
+        )
 
 
 def extract(path, dest, m):

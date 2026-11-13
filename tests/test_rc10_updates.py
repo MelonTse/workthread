@@ -68,7 +68,7 @@ def test_fresh_rc10_does_not_reuse_legacy_bootstrap(tmp_path, monkeypatch):
     old.parent.mkdir(parents=True)
     old.write_bytes(b"legacy broken copier")
     args = package(tmp_path, key, "d" * 40, "1.0.0rc11", ["1.0.0rc10@" + RC10])
-    _, doc, sig, public = args
+    archive, doc, sig, public = args
     monkeypatch.setattr(rel, "trust", lambda: public)
     monkeypatch.setattr(tx, "native_quiet", lambda **_: None)
     monkeypatch.setattr(sys, "executable", str(exe))
@@ -81,6 +81,11 @@ def test_fresh_rc10_does_not_reuse_legacy_bootstrap(tmp_path, monkeypatch):
         "sig": sig.decode(),
         "notes": "fixture",
     }
+    stage = updates.stage(json.loads(doc))
+    stage.mkdir(parents=True)
+    (stage / "program.zip").write_bytes(archive.read_bytes())
+    (stage / "update.json").write_bytes(doc)
+    (stage / "update.sig").write_bytes(sig)
     updates.ready = True
     updates.action("apply", True)
     helper = __import__("pathlib").Path(handoff[0][0])
@@ -191,3 +196,117 @@ def test_native_web_evidence_allows_only_verified_worker_changes(tmp_path, tampe
             qa.verify_web_records(root, prior, tmp_path / "differences.json")
     else:
         qa.verify_web_records(root, prior, tmp_path / "differences.json")
+
+
+def downloaded_candidate(tmp_path, monkeypatch):
+    root, _, (archive, doc, sig, public) = setup_rc9(tmp_path)
+    monkeypatch.setattr(rel, "trust", lambda: public)
+    offer = {
+        "doc": doc.decode(),
+        "sig": sig.decode(),
+        "version": "1.0.0rc10",
+        "notes": "合成更新",
+    }
+    monkeypatch.setattr(rel, "discover", lambda *_: offer)
+    monkeypatch.setattr(
+        rel, "fetch", lambda _, limit, out: out.write(archive.read_bytes())
+    )
+    updates = ctl.Updates(root)
+    updates.action("check")
+    updates.action("download")
+    return root, updates, archive
+
+
+def test_check_failure_and_restart_keep_verified_download(tmp_path, monkeypatch):
+    root, updates, _ = downloaded_candidate(tmp_path, monkeypatch)
+    prior = updates.status()
+
+    def denied(*_):
+        raise rel.FetchError("HTTP 403：访问被拒绝", {"http_status": 403})
+
+    monkeypatch.setattr(rel, "discover", denied)
+    with pytest.raises(ValueError, match="403"):
+        updates.action("check")
+    restored = ctl.Updates(root).status()
+    assert restored["ready"] and restored["offer"] == prior["offer"]
+    assert restored["checked_at"] == prior["checked_at"]
+    assert restored["last_error"]["http_status"] == 403
+    monkeypatch.setattr(rel, "discover", lambda *_: None)
+    assert not updates.action("check")["offer"]
+    assert not ctl.Updates(root).ready
+
+
+def test_partial_or_tampered_package_cannot_apply(tmp_path, monkeypatch):
+    root, updates, archive = downloaded_candidate(tmp_path, monkeypatch)
+    stage = updates.stage(json.loads(updates.offer["doc"]))
+    (stage / "program.zip").write_bytes(archive.read_bytes()[:-1])
+    assert not ctl.Updates(root).ready
+    updates.stop = lambda: pytest.fail("invalid package must not stop the service")
+    with pytest.raises(ValueError, match="重新下载"):
+        updates.action("apply", True)
+    assert not updates.ready and not updates.attempt.read()
+    (stage / "program.zip").unlink()
+
+    def broken(_, limit, out):
+        out.write(b"truncated")
+        raise TimeoutError()
+
+    monkeypatch.setattr(rel, "fetch", broken)
+    with pytest.raises(ValueError, match="超时"):
+        updates.action("download")
+    assert not ctl.Updates(root).ready
+    assert {f.name for f in stage.iterdir()} == {"update.json", "update.sig"}
+
+
+def test_detached_update_identity_and_startup_confirmation(tmp_path, monkeypatch):
+    root, updates, _ = downloaded_candidate(tmp_path, monkeypatch)
+    before = records(root)
+    rel.save(root / tx.STATE / "result.json", {"version": "1.0.0rc9"})
+    monkeypatch.setattr(tx, "native_quiet", lambda **_: None)
+    handoffs = []
+    monkeypatch.setattr(ctl, "detached", handoffs.append)
+    updates.stop = lambda: None
+    identifier = "f" * 32
+    response = updates.action("apply", True, identifier)
+    assert response["attempt"]["id"] == identifier
+    assert response["attempt"]["phase"] == "waiting-stop"
+    assert response["last"]["version"] == "1.0.0rc9"
+    with pytest.raises(ValueError, match="正在退出"):
+        updates.action("apply", True, identifier)
+    assert len(handoffs) == 1
+    _, _, _, _, digest, pid, port, sent = handoffs[0]
+    assert sent == identifier
+    monkeypatch.setattr(ctl, "wait_for_server", lambda _: None)
+    with pytest.raises(ValueError, match="失效"):
+        ctl.finish(root, digest, int(pid), int(port), "a" * 32)
+    real_apply = tx.apply
+    monkeypatch.setattr(
+        tx,
+        "apply",
+        lambda *a, **k: real_apply(
+            *a, **k, check=lambda _, trial, live: tx.probe(trial, live)
+        ),
+    )
+    ctl.finish(root, digest, int(pid), int(port), sent)
+    assert tx.current(root)[1]["version"] == "1.0.0rc10"
+    assert records(root) == before
+    new = ctl.Updates(root)
+    assert new.status()["attempt"]["phase"] == "restarting"
+    new.confirm_started(lambda: {"ok": True, "version": "1.0.0rc10"})
+    assert new.status()["attempt"]["phase"] == "succeeded"
+    assert new.status()["current_commit"] == response["attempt"]["target_commit"]
+
+
+@pytest.mark.parametrize("wrong_identity", [True, False])
+def test_update_success_requires_target_and_health(
+    tmp_path, monkeypatch, wrong_identity
+):
+    root, updates, _ = downloaded_candidate(tmp_path, monkeypatch)
+    m = json.loads(updates.offer["doc"])
+    updates.attempt.write(updates.attempt.start(tx.current(root)[1], m), "restarting")
+    if not wrong_identity:
+        rel.save(root / "BUILD_INFO.json", identity(m["version"], m["commit_sha"]))
+    ctl.Updates(root).confirm_started(lambda: {"ok": False})
+    job = updates.attempt.read()
+    assert job["phase"] == "failed"
+    assert ("构建不符" if wrong_identity else "健康检查") in job["error"]

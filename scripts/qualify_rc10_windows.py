@@ -172,9 +172,6 @@ def web_update(root, out, before):
     proc = subprocess.Popen(
         [
             str(root / tx.EXE),
-            "--maintenance",
-            "launch",
-            str(root),
             "--workspace",
             str(root / "workspace"),
             "serve",
@@ -184,6 +181,8 @@ def web_update(root, out, before):
     )
     try:
         for _ in range(200):
+            if proc.poll() is not None:
+                raise RuntimeError(f"RC10 entry exited before serving: {proc.returncode}")
             try:
                 with urllib.request.urlopen(
                     url + "/api/v1/software-update", timeout=2

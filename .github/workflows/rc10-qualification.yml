@@ -20,8 +20,14 @@ jobs:
         shell: pwsh
         run: |
           npm install --prefix "$env:RUNNER_TEMP\browser-qa" playwright
-          "WT_QA_PLAYWRIGHT=$env:RUNNER_TEMP\browser-qa\node_modules\playwright" >> $env:GITHUB_ENV
-          "WT_QA_CHROME=C:\Program Files\Google\Chrome\Application\chrome.exe" >> $env:GITHUB_ENV
+          $lib = "$env:RUNNER_TEMP\browser-qa\node_modules\playwright"
+          $env:PLAYWRIGHT_BROWSERS_PATH = "$env:RUNNER_TEMP\browser-qa\browsers"
+          & node "$lib\cli.js" install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install the dedicated test browser' }
+          $exe = & node -e "console.log(require(process.argv[1]).chromium.executablePath())" $lib
+          "WT_QA_PLAYWRIGHT=$lib" >> $env:GITHUB_ENV
+          "WT_QA_CHROME=$exe" >> $env:GITHUB_ENV
+          "PLAYWRIGHT_BROWSERS_PATH=$env:PLAYWRIGHT_BROWSERS_PATH" >> $env:GITHUB_ENV
       - name: Build disposable signed fixtures (not shipping assets)
         run: uv run --frozen python scripts/qualify_rc10_windows.py --prepare --output artifacts/rc10-qa
       - name: Native update and recovery under ordinary user rights

@@ -16,8 +16,12 @@ from workthread.updating.releases import REPO, digest, version
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("archive", type=Path)
-    p.add_argument(
-        "--source", action="append", required=True, help="version@full_commit_sha"
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--source", action="append", help="version@full_commit_sha")
+    mode.add_argument(
+        "--fresh-only",
+        action="store_true",
+        help="Sign a clean-install release without allowing older updaters",
     )
     p.add_argument(
         "--output", type=Path, required=True, help="New local metadata directory"
@@ -43,7 +47,8 @@ def main():
         != key.public_key().public_bytes_raw()
     ):
         p.error("ZIP identity or embedded public key mismatch")
-    for src in a.source:
+    sources = a.source or []
+    for src in sources:
         old, _, commit = src.partition("@")
         if version(old) >= v or not re.fullmatch("[a-f0-9]{40}", commit):
             p.error("Invalid source build")
@@ -53,7 +58,7 @@ def main():
         "platform": "windows-x64",
         "version": str(v),
         "commit_sha": info["commit_sha"],
-        "sources": sorted(set(a.source)),
+        "sources": sorted(set(sources)),
         "asset": a.archive.name,
         "size": a.archive.stat().st_size,
         "sha256": digest(a.archive),

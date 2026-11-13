@@ -1,0 +1,83 @@
+name: Publish verified RC10
+on:
+  push:
+    branches: ['codex/rc10-release-verification']
+permissions:
+  contents: read
+  actions: read
+env:
+  RC10_COMMIT: f488b17d3f27488b1d23976c7c58990b3aa5dbda
+  RC10_BUILD_RUN: '43385316785'
+  RC10_QA_RUN: '43385316756'
+  RC10_SHA: af17c8568863ee18ce87c037dc842d89e261fd41663490d4487d0887c1f65bfb
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RC10_BUILD_RUN }}
+          name: WorkThread-windows-candidate
+          github-token: ${{ github.token }}
+          path: assets
+      - name: Verify tested build, ZIP, and maintainer signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for run in "$RC10_BUILD_RUN" "$RC10_QA_RUN"; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq '.head_sha + " " + .conclusion' | grep -Fx "$RC10_COMMIT success"
+          done
+          uv run --frozen python scripts/verify_rc10_release.py assets qualification
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RC10_BUILD_RUN }}
+          name: WorkThread-windows-candidate
+          github-token: ${{ github.token }}
+          path: assets
+      - name: Publish the verified assets as the RC10 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v1.0.0rc10
+          name=WorkThread-1.0.0rc10-windows-x64.zip
+          cp qualification/update.{json,sig} docs/windows/RC10_CLEAN_INSTALL.md assets/
+          cd assets
+          test "$(sha256sum "$name" | cut -d' ' -f1)" = "$RC10_SHA"
+          sha256sum -c "$name.sha256"
+          gh release create "$tag" "$name" "$name.sha256" update.json update.sig RC10_CLEAN_INSTALL.md --draft --prerelease --target "$RC10_COMMIT" --title 'WorkThread 1.0.0rc10 · 纯净安装与可靠的后续网页更新' --notes-file ../qualification/rc10-release-notes.md
+          gh release edit "$tag" --draft=false
+  public-check:
+    needs: publish
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+      - name: Download public assets and verify the official first install
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path assets,metadata | Out-Null
+          $base = 'https://github.com/MelonTse/workthread/releases/download/v1.0.0rc10/'
+          $name = 'WorkThread-1.0.0rc10-windows-x64.zip'
+          foreach ($file in @($name, "$name.sha256")) { curl.exe --fail --location --retry 3 --max-time 180 ($base + $file) -o "assets/$file"; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+          foreach ($file in @('update.json','update.sig')) { curl.exe --fail --location --retry 3 --max-time 180 ($base + $file) -o "metadata/$file"; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+          uv run --frozen python scripts/verify_rc10_release.py assets metadata --public-install

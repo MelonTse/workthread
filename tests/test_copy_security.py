@@ -86,3 +86,38 @@ def test_missing_copy_log_is_not_success(tmp_path):
     with pytest.raises(ValueError):
         check_copy_log(0, tmp_path)
     assert rel.read(tmp_path / "process-result.json")["log_missing"]
+
+
+def test_progress_keeps_utf8_evidence_with_legacy_console(tmp_path, monkeypatch):
+    import io
+    import sys
+
+    from workthread.updating.copying import Evidence
+
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", console)
+    evidence = Evidence(tmp_path / "legacy-console")
+    evidence.event("复制中文 空格目录")
+    assert "复制中文 空格目录" in (evidence.directory / "progress.txt").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_progress_keeps_evidence_after_console_pipe_closes(tmp_path, monkeypatch):
+    import sys
+
+    from workthread.updating.copying import Evidence
+
+    class ClosedPipe:
+        def write(self, _):
+            raise BrokenPipeError()
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stdout", ClosedPipe())
+    evidence = Evidence(tmp_path / "closed-console")
+    evidence.event("复制继续")
+    assert "复制继续" in (evidence.directory / "progress.txt").read_text(
+        encoding="utf-8"
+    )

@@ -24,9 +24,12 @@ class Evidence:
 
     def event(self, message):
         line = time.strftime("%Y-%m-%d %H:%M:%S") + " " + message
-        print(line, flush=True)
         with (self.directory / "progress.txt").open("a", encoding="utf-8") as stream:
             stream.write(line + "\n")
+        # A detached/redirected or legacy-codepage console is only a display sink.
+        # Keep the durable UTF-8 evidence even when that sink cannot render Chinese.
+        with contextlib.suppress(UnicodeError, OSError):
+            print(line, flush=True)
 
     @contextlib.contextmanager
     def progress(self, label):

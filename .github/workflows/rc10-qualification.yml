@@ -1,0 +1,42 @@
+name: RC10 upgrade qualification
+on:
+  push:
+    branches: ['codex/rc10-updates-pagination']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - run: uv sync --frozen --python 3.13
+      - name: Browser dependencies for synthetic checks
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP\browser-qa" playwright
+          "WT_QA_PLAYWRIGHT=$env:RUNNER_TEMP\browser-qa\node_modules\playwright" >> $env:GITHUB_ENV
+          "WT_QA_CHROME=C:\Program Files\Google\Chrome\Application\chrome.exe" >> $env:GITHUB_ENV
+      - name: Build disposable signed fixtures (not shipping assets)
+        run: uv run --frozen python scripts/qualify_rc10_windows.py --prepare --output artifacts/rc10-qa
+      - name: Native update and recovery under ordinary user rights
+        run: ./scripts/check_rc10_standard_user.ps1
+      - name: Mail pagination browser regression
+        shell: pwsh
+        run: uv run --frozen python scripts/check_mail_pages.py --playwright "$env:WT_QA_PLAYWRIGHT" --browser "$env:WT_QA_CHROME" --output artifacts/rc10-mail-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RC10-synthetic-evidence
+          path: |
+            artifacts/rc10-qa/WINDOWS_REPORT.json
+            artifacts/rc10-qa/fixture-info.json
+            artifacts/rc10-qa/standard-user.stdout.txt
+            artifacts/rc10-qa/standard-user.stderr.txt
+            artifacts/rc10-mail-browser/*.png
+            artifacts/rc10-mail-browser/*.json

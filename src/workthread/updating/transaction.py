@@ -109,29 +109,12 @@ def inspect(root):
 
 def copy_workspace(src, dst):
     if os.name == "nt":
-        # copy2 omits NTFS security descriptors and data streams. Never /MIR or /PURGE.
-        r = subprocess.run(
-            [
-                "robocopy.exe",
-                str(src),
-                str(dst),
-                "/E",
-                "/COPY:DATS",
-                "/DCOPY:DAT",
-                "/XJ",
-                "/R:0",
-                "/W:0",
-                "/NFL",
-                "/NDL",
-                "/NJH",
-                "/NJS",
-                "/NP",
-            ],
-            stdout=subprocess.DEVNULL,
-            check=False,
-        )
-        if r.returncode not in (0, 1):
-            raise ValueError(f"无法完整复制工作空间（robocopy {r.returncode}）")
+        from .copying import Copier, Evidence
+
+        # Both native entry points use this exact implementation; evidence stays
+        # in the transaction, never inside the business snapshot being compared.
+        evidence = Evidence(dst.parent.parent / ("copy-" + uuid.uuid4().hex))
+        Copier(evidence)(src, dst)
     else:
         shutil.copytree(src, dst)
 

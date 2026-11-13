@@ -87,6 +87,11 @@ def host(tmp, port):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--node")
+    p.add_argument(
+        "--rc10",
+        action="store_true",
+        help="RC9 transition, then RC10 web update to synthetic rc11",
+    )
     p.add_argument("--playwright")
     p.add_argument("--browser")
     p.add_argument("--serve", type=Path)
@@ -100,8 +105,20 @@ def main():
         root = tmp / "synthetic"
         init(root)
         key = Ed25519PrivateKey.generate()
-        apply(root, package(tmp, key))
-        _, doc, sig, pub = package(tmp, key, "f" * 40, "1.0.0rc5", ["1.0.0rc4@" + NEW])
+        if a.rc10:
+            old_sha = "49381b86143bbe5ce48b4f47c6d05880927b1b48"
+            rel.save(
+                root / "BUILD_INFO.json",
+                {**tx.current(root)[1], "version": "1.0.0rc9", "commit_sha": old_sha},
+            )
+            apply(
+                root, package(tmp, key, v="1.0.0rc10", sources=["1.0.0rc9@" + old_sha])
+            )
+            source, target = "1.0.0rc10@" + NEW, "1.0.0rc11"
+        else:
+            apply(root, package(tmp, key))
+            source, target = "1.0.0rc4@" + NEW, "1.0.0rc5"
+        _, doc, sig, pub = package(tmp, key, "f" * 40, target, [source])
         rel.save(
             tmp / "fixture.json",
             {
@@ -133,6 +150,7 @@ def main():
                     a.playwright,
                     a.browser,
                     url,
+                    target,
                 ]
             )
             if old.wait(45) != 0 or not (tmp / "handoff").exists():

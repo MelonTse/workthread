@@ -228,6 +228,12 @@ def create_app(store, updates=None, mail_tasks=None, instance_id=None):
     def search():
         return jsonify(store.search(request.args.get("q", "")))
 
+    @app.get("/api/v1/mail")
+    def mail_listing():
+        from .mail_listing import mail_page
+
+        return jsonify(mail_page(store, request.args))
+
     @app.get("/api/v1/mail/<mid>")
     def mail_detail(mid):
         with store.read_db() as c:

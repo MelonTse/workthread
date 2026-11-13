@@ -157,7 +157,10 @@ class Updates:
                 # A freshly installed server is running out of root/app. Windows will
                 # not replace a mapped EXE, even after the web server itself exits.
                 if helper.resolve() == (root / tx.EXE).resolve():
-                    bootstrap = state / "bootstrap"
+                    # A legacy bootstrap may still contain RC7/RC9's copier.
+                    # Pin the maintenance helper to the current verified build.
+                    bootstrap = tx.safe(tx.safe(state / "helpers") / rel.digest(helper))
+                    bootstrap.parent.mkdir(parents=True, exist_ok=True)
                     if not bootstrap.exists():
                         temp = state / ("bootstrap-" + uuid.uuid4().hex)
                         shutil.copytree(helper.parent, temp)
@@ -165,6 +168,8 @@ class Updates:
                             raise ValueError("无法验证独立升级工具")
                         tx.flush_tree(temp)
                         tx.atomic_move(temp, bootstrap)
+                    elif tx.catalog(bootstrap) != tx.catalog(helper.parent):
+                        raise ValueError("当前版本升级工具内容不一致，停止更新")
                     helper = bootstrap / "WorkThread.exe"
                 detached(
                     [
@@ -282,9 +287,7 @@ def finish(root, sha, pid, port):
         "committed",
         "rolled-back",
     ):
-        runner = state / "bootstrap/WorkThread.exe"
-        if not runner.exists():
-            runner = root / tx.EXE
+        runner = tx.current(root)[0] / tx.EXE
         detached(
             [
                 str(runner),
@@ -315,14 +318,41 @@ def cli(args):
         if rest[-1] != "--confirmed" or len(rest) != 4:
             raise ValueError("必须确认关闭 WorkBuddy 和 WorkThread 后继续")
         archive, meta = Path(rest[1]), Path(rest[2])
-        return tx.apply(
-            root,
-            archive,
-            (meta / "update.json").read_bytes(),
-            (meta / "update.sig").read_bytes().strip(),
-            rel.trust(),
-        )
+        return bootstrap(root, archive, meta)
     elif mode == "finish":
         finish(root, rest[1], int(rest[2]), int(rest[3]))
     elif mode != "inspect":
         raise ValueError("未知的维护操作")
+
+
+def bootstrap(root, archive, meta):
+    """Transition from an old updater using the NEW package's executable."""
+    from .copying import Evidence, probe_environment
+
+    state = root / tx.STATE
+    evidence = Evidence(state / "diagnostics" / (time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]))
+    if (state / "result.json").is_file():
+        evidence.save("previous-result.json", rel.read(state / "result.json"))
+    try:
+        doc, sig = (meta / "update.json").read_bytes(), (meta / "update.sig").read_bytes().strip()
+        key = rel.trust()
+        manifest = rel.signed(doc, sig, key, tx.current(root)[1])
+        rel.verify_zip(archive, manifest)
+        tx.native_quiet(root=root)
+        probe_environment(root, evidence)
+        with evidence.progress("停写检查、快照及版本切换"):
+            result = tx.apply(root, archive, doc, sig, key)
+        result = {**result, "status": "SUCCESS", "exit_code": 0}
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, ValueError) else describe_error(exc)
+        result = {"status": "FAILED", "exit_code": 1, "error": message,
+                  "diagnostics": str(evidence.directory)}
+        evidence.save("result.json", result)
+        rel.save(state / "result.json", result)
+        evidence.event("FAILED：" + message)
+        raise
+    evidence.save("result.json", result)
+    rel.save(state / "result.json", result)
+    rel.save(state / "request-error.json", {})
+    evidence.event("SUCCESS：升级完成；请从原 Start.cmd 启动并核对版本。")
+    return result

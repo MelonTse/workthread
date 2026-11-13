@@ -170,3 +170,5 @@ body[data-view=todos] .quick-capture,
 .knowledge-proposal blockquote {margin:8px 0 12px;padding:5px 12px;border-left:2px solid #b9c6d0;color:#546b7b;background:#f7f9fa;white-space:pre-wrap}
 .knowledge-job {display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12px}
 .knowledge-job span,.knowledge-job small {color:#607583}
+
+.mail-index{display:flex;flex-direction:column;overflow:hidden!important}#mail-list{overflow:auto;min-height:0;flex:1}.mail-index .card-heading,.mail-index .mail-search{flex-shrink:0}.mail-pagination{flex-shrink:0;padding:10px 14px;border-top:1px solid var(--line);background:#f5f7f9;font-size:11px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.mail-pagination>div:first-child{width:100%;color:var(--muted)}.mail-pagination input{width:52px;padding:5px}.mail-pagination button{padding:6px 9px}.mail-pagination .button-row{width:100%}@media(max-width:720px){.mail-index{height:360px;max-height:360px}}

@@ -737,6 +737,7 @@ async function openTodo(id = null, keepTab = false) {
 function wireMail() {
   document.querySelectorAll('[data-mail]').forEach(el => el.onclick = () => {
     mailState.messageId = el.dataset.mail;
+    mailState.results = null; mailState.pagination = null; mailState.query = '';
     switchView('mail')
   })
 }
@@ -753,6 +754,8 @@ async function openMail(id) {
 const mailState = {
   query: '',
   results: null,
+  pagination: null,
+  loading: false,
   messageId: null,
   draftId: null,
   detail: null,
@@ -806,22 +809,28 @@ function reviewRow(review) {
 }
 
 function mailView() {
-  const rows = mailState.results ?? data.messages;
+  if (mailState.results === null) {
+    $('#workspace-content').innerHTML = '<div class="card empty" role="status">正在读取邮件列表… <button id="retry-mail-page">重试</button></div>';
+    $('#retry-mail-page').onclick = attempt(() => loadMailPage(1, mailState.query, true));
+    if (!mailState.loading) attempt(() => loadMailPage(1, mailState.query, true))();
+    return;
+  }
+  const rows = mailState.results, paging = mailState.pagination;
   if (!rows.some(m => m.message_id === mailState.messageId)) {
     mailState.messageId = rows[0]?.message_id ?? null;
     mailState.draftId = null;
   }
-  const unlinked = data.drafts.filter(d => !d.message_id || !data.messages.some(m => m.message_id === d
-    .message_id));
+  const unlinked = data.drafts.filter(d => !d.message_id);
   // A draft whose mail is outside the snapshot is not guessed to belong to another message.
   const reviews = data.review_items.filter(r => r.state === 'pending' && !r.kind.startsWith('todo_') && !JSON.parse(r.payload).knowledge_job_id);
   $('#workspace-content').innerHTML = `
     <div class="mail-workspace">
       <article class="card mail-index">
-        <div class="card-heading"><h2>最近邮件</h2><small>${rows.length} 封${mailState.results ? '匹配' : ''}</small></div>
+        <div class="card-heading"><h2>邮件</h2><small id="mail-total">${mailState.query ? '匹配 ' : '共 '}${paging.total} 封</small></div>
         <form id="mail-search" class="toolbar mail-search">
       ${searchField('mail-query','搜索邮件','搜索邮件…',mailState.query)}
       <button type="submit">搜索</button>
+      <button type="button" id="refresh-mail-list">刷新邮件</button>
       <button type="button" id="clear-mail-search" ${mailState.query ? '' : 'disabled'}>清空搜索</button>
     </form>
 
@@ -833,6 +842,11 @@ function mailView() {
             <span>${E((m.preview ?? m.body_text ?? '').slice(0, 100))}</span>
             <small>${E(date(m.date))}</small>
           </button>`).join('') || '<div class="empty">没有匹配邮件。</div>'}</div>
+        <form id="mail-pagination" class="mail-pagination" aria-label="邮件分页">
+          <div role="status">${paging.total ? (paging.page-1)*paging.page_size+1 : 0}–${Math.min(paging.page*paging.page_size,paging.total)} / ${paging.total} 封${paging.new_count ? ' · 有新归档，请刷新' : ''}</div>
+          <div class="button-row"><button type="button" id="mail-prev" ${paging.page===1?'disabled':''}>上一页</button><button type="button" id="mail-next" ${paging.page===paging.pages?'disabled':''}>下一页</button></div>
+          <label>第 <input aria-label="邮件页码" type="number" name="page" min="1" max="${paging.pages}" value="${paging.page}" required> / ${paging.pages} 页</label><button type="submit">跳转</button>
+        </form>
       </article>
       <div id="mail-detail" class="mail-detail" aria-live="polite">
         <div class="card empty">${mailState.messageId ? '正在读取对应邮件与草稿…' : '选择邮件查看草稿'}</div>
@@ -848,19 +862,16 @@ function mailView() {
   };
   $('#mail-search').onsubmit = attempt(async e => {
     e.preventDefault();
-    const query = searchInput.value.trim();
-    if (!query) {
-      clearMailSearch();
-      return;
-    }
-    const requestId = ++mailState.searchRequest;
-    const result = await api('/mail/search?q=' + encodeURIComponent(query));
-    if (requestId !== mailState.searchRequest || view !== 'mail') return;
-    mailState.query = query;
-    mailState.results = result;
-    mailView();
+    await loadMailPage(1, searchInput.value.trim(), true);
   });
-  $('#clear-mail-search').onclick = clearMailSearch;
+  $('#clear-mail-search').onclick = attempt(clearMailSearch);
+  $('#refresh-mail-list').onclick = attempt(() => loadMailPage(1, mailState.query, true));
+  $('#mail-prev').onclick = attempt(() => loadMailPage(paging.page-1));
+  $('#mail-next').onclick = attempt(() => loadMailPage(paging.page+1));
+  $('#mail-pagination').onsubmit = attempt(async e => {
+    e.preventDefault();
+    await loadMailPage(Number(e.target.elements.page.value));
+  });
   document.querySelectorAll('[data-select-mail]').forEach(button => {
     button.onclick = attempt(() => selectMail(button.dataset.selectMail));
   });
@@ -876,12 +887,28 @@ function mailView() {
   if (mailState.messageId) attempt(() => selectMail(mailState.messageId))();
 }
 
-function clearMailSearch() {
-  ++mailState.searchRequest;
-  mailState.query = '';
-  mailState.results = null;
-  mailView();
-  $('#mail-query').focus();
+async function loadMailPage(page=1, query=mailState.query, reset=false) {
+  const requestId = ++mailState.searchRequest;
+  mailState.loading = true;
+  const params = new URLSearchParams({page, page_size:50, q:query});
+  if (!reset && mailState.pagination) params.set('snapshot', mailState.pagination.snapshot);
+  document.querySelectorAll('#mail-pagination button,#mail-search button').forEach(b => b.disabled=true);
+  try {
+    const result = await api('/mail?' + params);
+    if (requestId !== mailState.searchRequest || view !== 'mail') return;
+    mailState.query = query;
+    mailState.results = result.items;
+    mailState.pagination = result;
+  } finally {
+    if (requestId === mailState.searchRequest) {
+      mailState.loading = false;
+      if (view==='mail' && mailState.results !== null) mailView();
+    }
+  }
+}
+async function clearMailSearch() {
+  await loadMailPage(1, '', true);
+  $('#mail-query')?.focus();
 }
 
 async function selectMail(messageId) {

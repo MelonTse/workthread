@@ -25,6 +25,8 @@
 & 'G:\WorkThread-RC10-Upgrade\WorkThread-1.0.0rc10-windows-x64\app\WorkThread.exe' --maintenance inspect 'G:\WorkThread'
 ```
 
+   必须确认 `current.version=1.0.0rc9`、`supported=true`，并将完整 `commit_sha` 与签名清单的 `sources` 对照。`inspect` 只证明安装身份和结构可识别，不等于快照或升级完成。
+
 4. 准备一个从资源管理器独立打开的普通 PowerShell 窗口。确认拉取/AI任务已结束、WorkThread服务已正常停止、端口无监听。退出 WorkBuddy；只关闭浏览器不算停写。
 5. 在独立窗口执行包内官方脚本；下面的路径仅为示例，实际应按已校验文件位置填写：
 
@@ -34,6 +36,8 @@
 
 6. 用户确认停写后，亲自输入大写 `UPDATE`。工具会验签与核对来源、做同盘合成复制自检，然后快照、试迁移、切换和健康检查。不要同时启动工作台；不要删除锁、失败目录或改 ACL；不用管理员权限强行绕过。
 7. 以工具整体 `SUCCESS`、退出码 0、`.workthread-updates\result.json` 为准。`inspect` 成功或复制子进程返回 0 均不代表升级成功。
+
+   “按任意键继续”仅是命令窗口退出提示。窗口关闭不能作为成功证据；复制超过十秒时会输出进度心跳。若标题出现“选择”，先按 Esc 退出控制台文本选择状态，再观察日志；不要反复输入 UPDATE。
 8. 成功后从原 `Start.cmd` 启动一次，核对网页 RC10、原地址/两个 WorkBuddy 项目路径不变、邮件/待办/进展/知识/草稿/AI队列与回执/旧备份仍可用。确认后再按用户意愿恢复邮件任务。
 
 ## 失败或断电

@@ -164,6 +164,52 @@ def health(root, version):
         assert data["ok"] and data["version"] == version, data
 
 
+def verify_web_records(root, before, evidence):
+    """Account only for the real worker's verified rejection of our invalid fixture.
+
+    Do not ignore queue/receipt directories or database tables. Service identity files
+    are checked separately because a restarted service necessarily has a new identity.
+    """
+    from copy import deepcopy
+
+    from workthread.updating.copying import differences
+
+    after = records(root)
+    rel.save(evidence, [differences(a, b) for a, b in zip(before, after)])
+    expected = deepcopy(before)
+    actual = deepcopy(after)
+    for index, name in enumerate(tx.SPACES):
+        old, new = expected[index * 2 + 1], actual[index * 2 + 1]
+        for catalog in (old, new):
+            catalog.pop(".workthread-service.json", None)
+            catalog.pop(".workthread-service.lock", None)
+        if name == "workspace":
+            identity = rel.read(root / name / ".workthread-service.json")
+            assert set(identity) == {"port", "instance_id"}
+            assert 0 < identity["port"] < 65536 and len(identity["instance_id"]) == 48
+            assert (root / name / ".workthread-service.lock").stat().st_size == 0
+            unread = "agent-workspace/exchange/outputs/unread.json"
+            if unread not in new:
+                extra = set(new) - set(old)
+                payloads = [
+                    p
+                    for p in extra
+                    if p.startswith("agent-workspace/exchange/quarantine/")
+                    and not p.endswith(".error.json")
+                ]
+                assert len(payloads) == 1, extra
+                payload = payloads[0]
+                error = payload[:-5] + ".error.json"
+                assert extra == {payload, error}, extra
+                assert new[payload] == old[unread], (
+                    "Rejected synthetic payload lost or changed"
+                )
+                assert rel.read(root / name / error)["error"] == "无效的任务编号"
+                new[unread] = new.pop(payload)
+                new.pop(error)
+    assert actual == expected, [differences(a, b) for a, b in zip(expected, actual)]
+
+
 def web_update(root, out, before):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -182,7 +228,9 @@ def web_update(root, out, before):
     try:
         for _ in range(200):
             if proc.poll() is not None:
-                raise RuntimeError(f"RC10 entry exited before serving: {proc.returncode}")
+                raise RuntimeError(
+                    f"RC10 entry exited before serving: {proc.returncode}"
+                )
             try:
                 with urllib.request.urlopen(
                     url + "/api/v1/software-update", timeout=2
@@ -210,7 +258,7 @@ def web_update(root, out, before):
         stop_fixture(root)
         proc.wait(timeout=30)
     health(root, "1.0.0rc11")
-    assert records(root) == before
+    verify_web_records(root, before, out / (root.name + "-record-differences.json"))
 
 
 def exercise(out):

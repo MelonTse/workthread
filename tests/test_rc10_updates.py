@@ -149,3 +149,45 @@ def test_rc9_process_death_recovers_in_new_process(tmp_path, step):
     )
     assert records(root) == before
     assert tx.current(root)[1]["version"] == "1.0.0rc9"
+
+
+@pytest.mark.parametrize("tamper", [None, "payload", "todo", "custom"])
+def test_native_web_evidence_allows_only_verified_worker_changes(tmp_path, tamper):
+    import importlib.util
+    from pathlib import Path
+
+    from workthread.ai import Bridge
+    from workthread.core import Store
+
+    script = Path(__file__).resolve().parents[1] / "scripts/qualify_rc10_windows.py"
+    spec = importlib.util.spec_from_file_location("native_rc10_qa", script)
+    qa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(qa)
+    root, _, _ = setup_rc9(tmp_path)
+    space = root / "workspace"
+    (space / "agent-workspace/exchange/outputs/unread.json").write_text(
+        '{"synthetic":true}', encoding="utf-8"
+    )
+    prior = records(root)
+    Bridge(Store(space)).consume()
+    rel.save(
+        space / ".workthread-service.json", {"port": 8765, "instance_id": "a" * 48}
+    )
+    (space / ".workthread-service.lock").touch()
+    if tamper == "payload":
+        payload = next(
+            p
+            for p in (space / "agent-workspace/exchange/quarantine").glob("*.json")
+            if not p.name.endswith(".error.json")
+        )
+        payload.write_text("lost payload", encoding="utf-8")
+    elif tamper == "todo":
+        with Store(space).db() as c:
+            c.execute("UPDATE todos SET title='unexpected change'")
+    elif tamper == "custom":
+        (space / "agent-workspace/custom.md").unlink()
+    if tamper:
+        with pytest.raises(AssertionError):
+            qa.verify_web_records(root, prior, tmp_path / "differences.json")
+    else:
+        qa.verify_web_records(root, prior, tmp_path / "differences.json")

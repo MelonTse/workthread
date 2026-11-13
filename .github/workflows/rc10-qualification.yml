@@ -44,5 +44,6 @@ jobs:
             artifacts/rc10-qa/fixture-info.json
             artifacts/rc10-qa/standard-user.stdout.txt
             artifacts/rc10-qa/standard-user.stderr.txt
+            artifacts/rc10-qa/*-record-differences.json
             artifacts/rc10-mail-browser/*.png
             artifacts/rc10-mail-browser/*.json
